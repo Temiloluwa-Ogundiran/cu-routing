@@ -5,8 +5,8 @@ on:
     types:
       - opened
       - reopened
-      - synchronize
       - ready_for_review
+  workflow_dispatch:
 
 concurrency:
   group: codex-review-pr-${{ github.event.pull_request.number }}

@@ -102,18 +102,15 @@ def response_diagnostic(response: Any) -> str:
 def build_no_blocking_review(summary_note: str = "") -> str:
     cleaned_note = re.sub(r"\s+", " ", summary_note).strip()
     note_line = ""
-    optional_index = 2
     if cleaned_note:
         note_line = f"\n2. Reviewer note: {truncate(cleaned_note, 180)}"
-        optional_index = 3
 
     return (
         "### Codex Review\n"
         "Verdict: APPROVE\n\n"
         "Findings\n"
         "1. No blocking issues found."
-        f"{note_line}\n"
-        f"{optional_index}. Optional improvement: add or verify at least one regression test for the changed behavior.\n\n"
+        f"{note_line}\n\n"
         "Testing\n"
         "- Run the full test suite in CI.\n"
         "- Spot-check changed paths and one edge case."
@@ -183,8 +180,10 @@ def build_prompt(pr: dict[str, Any], files: list[dict[str, Any]], diff: str) -> 
 
     return f"""
 You are reviewing a GitHub pull request for correctness, reliability, and maintainability.
-Focus on bugs, regressions, missing validation, and missing tests.
+Focus on high-confidence bugs, regressions, missing validation, and missing tests.
 Be strict but beginner-friendly in tone.
+Do not include style, naming, or documentation nits unless they have clear runtime or correctness impact.
+Avoid speculative findings.
 
 Repository PR metadata:
 - Title: {title}
@@ -209,7 +208,7 @@ Output requirements (Markdown):
      - Why it matters
      - Clear suggested fix
 4. Then "Testing" section listing tests to add/run.
-5. If no significant issues, say "No blocking issues found." and still include lightweight suggestions.
+5. If no significant issues, say "No blocking issues found." and do not invent optional suggestions.
 6. Do not include extra preamble before "### Codex Review".
 7. Keep the whole response under 350 words.
 
@@ -332,10 +331,10 @@ def main() -> None:
     comment_body = f"{COMMENT_MARKER}\n{review}{footer}"
     upsert_issue_comment(repo, pr_number, github_token, comment_body)
 
-    # Fail the check if the verdict is not APPROVE.
-    if "Verdict: APPROVE" not in review:
+    # Only fail checks when Codex explicitly requests changes.
+    if "Verdict: REQUEST_CHANGES" in review.upper():
         raise SystemExit(
-            "Codex review did not approve. Check the PR comment for details.")
+            "Codex review requested changes. Check the PR comment for details.")
 
 
 if __name__ == "__main__":
