@@ -164,7 +164,7 @@ def main() -> None:
     repo = env("REPO")
     pr_number = env("PR_NUMBER")
     pr_action = os.getenv("PR_ACTION", "unknown")
-    model = os.getenv("OPENAI_MODEL", "").strip() or "gpt-5-mini"
+    model = os.getenv("OPENAI_MODEL", "").strip() or "gpt-5.3"
 
     pr_url = f"https://api.github.com/repos/{repo}/pulls/{pr_number}"
     files_url = f"{pr_url}/files?per_page=100"
