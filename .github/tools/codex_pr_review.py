@@ -140,8 +140,8 @@ def make_review(openai_api_key: str, model: str, prompt: str) -> str:
 
 
 def upsert_issue_comment(repo: str, pr_number: str, token: str, body: str) -> None:
-    comments_url = f"https://api.github.com/repos/{repo}/issues/{pr_number}/comments?per_page=100"
-    comments = gh_request_paginated(comments_url, token)
+    comments_url = f"https://api.github.com/repos/{repo}/issues/{pr_number}/comments"
+    comments = gh_request_paginated(f"{comments_url}?per_page=100", token)
 
     existing = None
     for comment in comments:
