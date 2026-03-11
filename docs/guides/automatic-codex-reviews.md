@@ -36,3 +36,9 @@ This repository can run automated Codex reviews on every pull request.
 - Confirm `Run Tests` check passes.
 - Confirm `Codex PR Review` check completes.
 - Confirm one bot comment exists with marker `<!-- codex-auto-review -->`.
+
+## Manual Re-Run
+If a workflow run times out or fails intermittently:
+1. Open the pull request.
+2. Go to the `Checks` tab.
+3. Re-run failed jobs from GitHub Actions.
