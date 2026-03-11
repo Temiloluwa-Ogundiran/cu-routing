@@ -18,7 +18,7 @@ Use one of:
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
-pytest -q
+pytest -q 
 ```
 
 ## Coding Rules
