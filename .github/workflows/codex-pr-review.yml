@@ -44,5 +44,5 @@ jobs:
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_ACTION: ${{ github.event.action }}
-          OPENAI_MODEL: ${{ vars.OPENAI_REVIEW_MODEL }}
+          OPENAI_MODEL: gpt-5.3
         run: python .github/tools/codex_pr_review.py
