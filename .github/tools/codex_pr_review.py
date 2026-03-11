@@ -130,6 +130,10 @@ def normalize_review_text(review: str) -> str:
     has_severity = "severity:" in lower
     has_no_blocking = "no blocking issues found" in lower
 
+    # APPROVE should not include actionable findings.
+    if "verdict: approve" in lower and has_severity:
+        return build_no_blocking_review()
+
     if has_header and has_verdict and has_findings and has_testing and (has_severity or has_no_blocking):
         return text
 
@@ -156,6 +160,24 @@ def normalize_review_text(review: str) -> str:
         "Testing\n"
         "- Re-run workflow."
     )
+
+
+def has_human_approval(repo: str, pr_number: str, token: str) -> bool:
+    reviews_url = f"https://api.github.com/repos/{repo}/pulls/{pr_number}/reviews?per_page=100"
+    reviews = gh_request_paginated(reviews_url, token)
+    latest_state_by_user: dict[str, str] = {}
+
+    for review in reviews:
+        user = review.get("user", {}) or {}
+        login = user.get("login", "")
+        user_type = user.get("type", "")
+        if not login:
+            continue
+        if user_type == "Bot" or login.endswith("[bot]"):
+            continue
+        latest_state_by_user[login] = str(review.get("state", "")).upper()
+
+    return any(state == "APPROVED" for state in latest_state_by_user.values())
 
 
 def build_prompt(pr: dict[str, Any], files: list[dict[str, Any]], diff: str) -> str:
@@ -314,6 +336,11 @@ def main() -> None:
     pr_number = env("PR_NUMBER")
     pr_action = os.getenv("PR_ACTION", "unknown")
     model = os.getenv("OPENAI_MODEL", "").strip() or "gpt-5-mini"
+
+    # Once a human reviewer has approved, avoid churn from repeated bot nits.
+    if has_human_approval(repo, pr_number, github_token):
+        print("Skipping Codex review because PR already has human approval.")
+        return
 
     pr_url = f"https://api.github.com/repos/{repo}/pulls/{pr_number}"
     files_url = f"{pr_url}/files?per_page=100"
