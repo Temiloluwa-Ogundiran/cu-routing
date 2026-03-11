@@ -66,6 +66,18 @@ class _FakeDistanceModule:
         return graph
 
 
+class _FakeDistanceModuleInPlaceNoneReturn:
+    def __init__(self, length_to_fill: float = 11.0) -> None:
+        self.length_to_fill = length_to_fill
+        self.called = False
+
+    def add_edge_lengths(self, graph: nx.MultiDiGraph) -> None:
+        self.called = True
+        for _, _, _, edge_data in graph.edges(keys=True, data=True):
+            edge_data.setdefault("length", self.length_to_fill)
+        return None
+
+
 class _FakeOsmnx:
     def __init__(self, graph: nx.MultiDiGraph) -> None:
         self._graph = graph
@@ -76,6 +88,15 @@ class _FakeOsmnx:
     def graph_from_polygon(self, polygon, *, network_type: str, simplify: bool) -> nx.MultiDiGraph:
         self.received_polygon = polygon
         self.received_kwargs = {"network_type": network_type, "simplify": simplify}
+        return self._graph
+
+
+class _FakeOsmnxInPlaceAddEdgeLengths:
+    def __init__(self, graph: nx.MultiDiGraph) -> None:
+        self._graph = graph
+        self.distance = _FakeDistanceModuleInPlaceNoneReturn()
+
+    def graph_from_polygon(self, _polygon, *, network_type: str, simplify: bool) -> nx.MultiDiGraph:
         return self._graph
 
 
@@ -139,6 +160,22 @@ def test_build_walking_graph_adds_missing_length_before_distance_m(tmp_path, mon
     assert result.edges[1, 2, 0]["distance_m"] == pytest.approx(42.0)
 
 
+def test_build_walking_graph_supports_in_place_add_edge_lengths_returning_none(tmp_path, monkeypatch):
+    boundary_path = tmp_path / "campus_boundary.geojson"
+    _write_boundary(boundary_path)
+
+    _patch_shapely(monkeypatch)
+    graph = nx.MultiDiGraph()
+    graph.add_edge(1, 2, key=0)
+    fake_osmnx = _FakeOsmnxInPlaceAddEdgeLengths(graph)
+    monkeypatch.setattr(graph_builder, "_import_osmnx", lambda: fake_osmnx)
+
+    result = graph_builder.build_walking_graph_from_polygon(str(boundary_path))
+
+    assert fake_osmnx.distance.called is True
+    assert result.edges[1, 2, 0]["distance_m"] == pytest.approx(11.0)
+
+
 def test_build_walking_graph_uses_top_level_add_edge_lengths_fallback(tmp_path, monkeypatch):
     boundary_path = tmp_path / "campus_boundary.geojson"
     _write_boundary(boundary_path)
@@ -183,6 +220,14 @@ def test_load_boundary_polygon_rejects_invalid_json(tmp_path):
 
     with pytest.raises(ValueError, match="Invalid boundary GeoJSON"):
         graph_builder._load_boundary_polygon(str(invalid_boundary_path))
+
+
+def test_load_boundary_polygon_rejects_directory_path(tmp_path):
+    boundary_dir = tmp_path / "boundary_dir"
+    boundary_dir.mkdir()
+
+    with pytest.raises(FileNotFoundError, match="not a file"):
+        graph_builder._load_boundary_polygon(str(boundary_dir))
 
 
 def test_load_boundary_polygon_rejects_malformed_geometry_mapping(tmp_path):
@@ -237,6 +282,36 @@ def test_load_boundary_polygon_searches_feature_collection_beyond_first(tmp_path
     assert seen["geometry"]["type"] == "Polygon"
 
 
+def test_load_boundary_polygon_supports_geometry_collection(tmp_path, monkeypatch):
+    boundary_path = tmp_path / "campus_boundary.geojson"
+    payload = {
+        "type": "Feature",
+        "geometry": {
+            "type": "GeometryCollection",
+            "geometries": [
+                {"type": "Point", "coordinates": [3.15, 6.67]},
+                {
+                    "type": "Polygon",
+                    "coordinates": [[[3.146, 6.669], [3.161, 6.669], [3.161, 6.678], [3.146, 6.678], [3.146, 6.669]]],
+                },
+            ],
+        },
+    }
+    boundary_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    seen = {}
+
+    def _shape_fn(geometry):
+        seen["geometry"] = geometry
+        return _FakePolygon()
+
+    _patch_shapely(monkeypatch, shape_fn=_shape_fn)
+    polygon = graph_builder._load_boundary_polygon(str(boundary_path))
+
+    assert isinstance(polygon, _FakePolygon)
+    assert seen["geometry"]["type"] == "Polygon"
+
+
 def test_load_boundary_polygon_preserves_multipolygon(tmp_path, monkeypatch):
     boundary_path = tmp_path / "campus_boundary.geojson"
     payload = {
@@ -252,6 +327,15 @@ def test_load_boundary_polygon_preserves_multipolygon(tmp_path, monkeypatch):
     geometry = graph_builder._load_boundary_polygon(str(boundary_path))
 
     assert isinstance(geometry, _FakeMultiPolygon)
+
+
+def test_is_polygon_geometry_mapping_accepts_tuple_coordinates():
+    geometry = {
+        "type": "Polygon",
+        "coordinates": (((3.146, 6.669), (3.161, 6.669), (3.161, 6.678), (3.146, 6.678), (3.146, 6.669)),),
+    }
+
+    assert graph_builder._is_polygon_geometry_mapping(geometry) is True
 
 
 def test_normalise_edge_distances_rejects_non_numeric_length():

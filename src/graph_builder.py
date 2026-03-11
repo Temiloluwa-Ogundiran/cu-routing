@@ -28,18 +28,31 @@ def _import_shapely_geometry() -> tuple[Any, Any, Any]:
     return MultiPolygon, Polygon, shape
 
 
-def _has_valid_polygon_coordinates(geometry_type: str, coordinates: Any) -> bool:
-    if not isinstance(coordinates, list) or not coordinates:
+def _is_coordinate_sequence(value: Any) -> bool:
+    return isinstance(value, (list, tuple))
+
+
+def _has_valid_ring_coordinates(ring: Any) -> bool:
+    if not _is_coordinate_sequence(ring) or len(ring) < 4:
         return False
+    return all(_is_coordinate_sequence(point) and len(point) >= 2 for point in ring)
+
+
+def _has_valid_polygon_coordinates(geometry_type: str, coordinates: Any) -> bool:
+    if not _is_coordinate_sequence(coordinates) or not coordinates:
+        return False
+
     if geometry_type == "Polygon":
-        return any(isinstance(ring, list) and len(ring) >= 4 for ring in coordinates)
+        return any(_has_valid_ring_coordinates(ring) for ring in coordinates)
+
     if geometry_type == "MultiPolygon":
         for polygon in coordinates:
-            if not isinstance(polygon, list) or not polygon:
+            if not _is_coordinate_sequence(polygon) or not polygon:
                 continue
-            if any(isinstance(ring, list) and len(ring) >= 4 for ring in polygon):
+            if any(_has_valid_ring_coordinates(ring) for ring in polygon):
                 return True
         return False
+
     return False
 
 
@@ -53,12 +66,43 @@ def _is_polygon_geometry_mapping(value: Any) -> bool:
     return _has_valid_polygon_coordinates(geometry_type, coordinates)
 
 
+def _extract_from_geometry_object(value: Any) -> tuple[dict[str, Any] | None, bool]:
+    if not isinstance(value, dict):
+        return None, False
+
+    geometry_type = value.get("type")
+    if geometry_type is None:
+        if "coordinates" in value or "geometries" in value:
+            return None, True
+        return None, False
+
+    if geometry_type in SUPPORTED_BOUNDARY_GEOMETRY_TYPES:
+        if _is_polygon_geometry_mapping(value):
+            return value, False
+        return None, True
+
+    if geometry_type == "GeometryCollection":
+        geometries = value.get("geometries")
+        if not _is_coordinate_sequence(geometries) or not geometries:
+            return None, True
+
+        saw_invalid_geometry = False
+        for geometry in geometries:
+            extracted, invalid = _extract_from_geometry_object(geometry)
+            if extracted is not None:
+                return extracted, False
+            saw_invalid_geometry = saw_invalid_geometry or invalid
+        return None, saw_invalid_geometry
+
+    return None, False
+
+
 def _extract_geometry(payload: dict[str, Any]) -> tuple[dict[str, Any] | None, bool]:
     payload_type = payload.get("type")
 
     if payload_type == "FeatureCollection":
         features = payload.get("features")
-        if not isinstance(features, list) or not features:
+        if not _is_coordinate_sequence(features) or not features:
             return None, False
 
         saw_invalid_geometry = False
@@ -68,24 +112,20 @@ def _extract_geometry(payload: dict[str, Any]) -> tuple[dict[str, Any] | None, b
             geometry = feature.get("geometry")
             if geometry is None:
                 continue
-            if _is_polygon_geometry_mapping(geometry):
-                return geometry, False
-            if isinstance(geometry, dict):
-                saw_invalid_geometry = True
+            extracted, invalid = _extract_from_geometry_object(geometry)
+            if extracted is not None:
+                return extracted, False
+            saw_invalid_geometry = saw_invalid_geometry or invalid
         return None, saw_invalid_geometry
 
     if payload_type == "Feature":
         geometry = payload.get("geometry")
         if geometry is None:
             return None, False
-        if _is_polygon_geometry_mapping(geometry):
-            return geometry, False
-        return None, isinstance(geometry, dict)
+        return _extract_from_geometry_object(geometry)
 
-    if payload_type in SUPPORTED_BOUNDARY_GEOMETRY_TYPES:
-        if _is_polygon_geometry_mapping(payload):
-            return payload, False
-        return None, True
+    if payload_type in SUPPORTED_BOUNDARY_GEOMETRY_TYPES or payload_type == "GeometryCollection":
+        return _extract_from_geometry_object(payload)
 
     return None, False
 
@@ -94,6 +134,8 @@ def _load_boundary_polygon(polygon_geojson_path: str) -> Any:
     boundary_path = Path(polygon_geojson_path)
     if not boundary_path.exists():
         raise FileNotFoundError(f"Boundary file does not exist: {boundary_path}")
+    if not boundary_path.is_file():
+        raise FileNotFoundError(f"Boundary path is not a file: {boundary_path}")
 
     try:
         payload = json.loads(boundary_path.read_text(encoding="utf-8"))
@@ -170,7 +212,9 @@ def build_walking_graph_from_polygon(polygon_geojson_path: str) -> nx.MultiDiGra
 
     if _has_missing_edge_lengths(graph):
         add_edge_lengths = _resolve_add_edge_lengths(ox)
-        graph = add_edge_lengths(graph)
+        returned_graph = add_edge_lengths(graph)
+        if returned_graph is not None:
+            graph = returned_graph
 
     _normalise_edge_distances(graph)
     return graph
