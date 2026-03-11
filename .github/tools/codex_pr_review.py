@@ -335,10 +335,10 @@ def main() -> None:
     comment_body = f"{COMMENT_MARKER}\n{review}{footer}"
     upsert_issue_comment(repo, pr_number, github_token, comment_body)
 
-    # Only fail checks when Codex explicitly requests changes.
-    if "Verdict: REQUEST_CHANGES" in review.upper():
+    # Fail the check unless the verdict is APPROVE.
+    if "Verdict: APPROVE" not in review:
         raise SystemExit(
-            "Codex review requested changes. Check the PR comment for details.")
+            "Codex review did not approve. Check the PR comment for details.")
 
 
 if __name__ == "__main__":
