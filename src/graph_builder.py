@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 from pathlib import Path
 from typing import Any
@@ -181,6 +182,53 @@ def _resolve_add_edge_lengths(ox: Any) -> Any:
     )
 
 
+def _supports_edges_argument(add_edge_lengths: Any) -> bool:
+    try:
+        signature = inspect.signature(add_edge_lengths)
+    except (TypeError, ValueError):
+        return False
+
+    for parameter in signature.parameters.values():
+        if parameter.kind == inspect.Parameter.VAR_KEYWORD:
+            return True
+        if parameter.name == "edges":
+            return True
+    return False
+
+
+def _fill_missing_edge_lengths(graph: nx.MultiDiGraph, ox: Any) -> nx.MultiDiGraph:
+    missing_edges: list[tuple[Any, Any, Any]] = []
+    preserved_lengths: dict[tuple[Any, Any, Any], Any] = {}
+
+    for source, target, key, edge_data in graph.edges(keys=True, data=True):
+        edge_key = (source, target, key)
+        if edge_data.get("length") is None:
+            missing_edges.append(edge_key)
+        else:
+            preserved_lengths[edge_key] = edge_data["length"]
+
+    if not missing_edges:
+        return graph
+
+    add_edge_lengths = _resolve_add_edge_lengths(ox)
+    if _supports_edges_argument(add_edge_lengths):
+        returned_graph = add_edge_lengths(graph, edges=missing_edges)
+    else:
+        returned_graph = add_edge_lengths(graph)
+
+    if returned_graph is not None:
+        graph = returned_graph
+
+    # Preserve existing lengths in case the OSMnx implementation recomputed
+    # all edges instead of only the missing subset.
+    for edge_key, original_length in preserved_lengths.items():
+        source, target, key = edge_key
+        if graph.has_edge(source, target, key):
+            graph.edges[source, target, key]["length"] = original_length
+
+    return graph
+
+
 def _normalise_edge_distances(graph: nx.MultiDiGraph) -> None:
     for source, target, key, edge_data in graph.edges(keys=True, data=True):
         edge_label = f"{source}->{target}, key={key}"
@@ -210,11 +258,7 @@ def build_walking_graph_from_polygon(polygon_geojson_path: str) -> nx.MultiDiGra
     if graph.number_of_edges() == 0:
         raise ValueError("OSMnx returned an empty walking graph for the provided boundary.")
 
-    if _has_missing_edge_lengths(graph):
-        add_edge_lengths = _resolve_add_edge_lengths(ox)
-        returned_graph = add_edge_lengths(graph)
-        if returned_graph is not None:
-            graph = returned_graph
+    graph = _fill_missing_edge_lengths(graph, ox)
 
     _normalise_edge_distances(graph)
     return graph

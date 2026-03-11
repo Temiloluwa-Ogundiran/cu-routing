@@ -78,6 +78,31 @@ class _FakeDistanceModuleInPlaceNoneReturn:
         return None
 
 
+class _FakeDistanceModuleWithEdgesParameter:
+    def __init__(self, length_to_fill: float = 17.0) -> None:
+        self.length_to_fill = length_to_fill
+        self.received_edges = None
+
+    def add_edge_lengths(self, graph: nx.MultiDiGraph, edges=None) -> nx.MultiDiGraph:
+        self.received_edges = edges
+        edges_to_fill = edges if edges is not None else list(graph.edges(keys=True))
+        for source, target, key in edges_to_fill:
+            graph.edges[source, target, key]["length"] = self.length_to_fill
+        return graph
+
+
+class _FakeDistanceModuleOverwriteAll:
+    def __init__(self, length_to_fill: float = 99.0) -> None:
+        self.length_to_fill = length_to_fill
+        self.called = False
+
+    def add_edge_lengths(self, graph: nx.MultiDiGraph) -> nx.MultiDiGraph:
+        self.called = True
+        for _, _, _, edge_data in graph.edges(keys=True, data=True):
+            edge_data["length"] = self.length_to_fill
+        return graph
+
+
 class _FakeOsmnx:
     def __init__(self, graph: nx.MultiDiGraph) -> None:
         self._graph = graph
@@ -95,6 +120,24 @@ class _FakeOsmnxInPlaceAddEdgeLengths:
     def __init__(self, graph: nx.MultiDiGraph) -> None:
         self._graph = graph
         self.distance = _FakeDistanceModuleInPlaceNoneReturn()
+
+    def graph_from_polygon(self, _polygon, *, network_type: str, simplify: bool) -> nx.MultiDiGraph:
+        return self._graph
+
+
+class _FakeOsmnxEdgesArgument:
+    def __init__(self, graph: nx.MultiDiGraph) -> None:
+        self._graph = graph
+        self.distance = _FakeDistanceModuleWithEdgesParameter()
+
+    def graph_from_polygon(self, _polygon, *, network_type: str, simplify: bool) -> nx.MultiDiGraph:
+        return self._graph
+
+
+class _FakeOsmnxOverwriteAllLengths:
+    def __init__(self, graph: nx.MultiDiGraph) -> None:
+        self._graph = graph
+        self.distance = _FakeDistanceModuleOverwriteAll()
 
     def graph_from_polygon(self, _polygon, *, network_type: str, simplify: bool) -> nx.MultiDiGraph:
         return self._graph
@@ -174,6 +217,43 @@ def test_build_walking_graph_supports_in_place_add_edge_lengths_returning_none(t
 
     assert fake_osmnx.distance.called is True
     assert result.edges[1, 2, 0]["distance_m"] == pytest.approx(11.0)
+
+
+def test_build_walking_graph_passes_missing_edges_when_supported(tmp_path, monkeypatch):
+    boundary_path = tmp_path / "campus_boundary.geojson"
+    _write_boundary(boundary_path)
+
+    _patch_shapely(monkeypatch)
+    graph = nx.MultiDiGraph()
+    graph.add_edge(1, 2, key=0, length=8.5)
+    graph.add_edge(2, 3, key=0)
+    fake_osmnx = _FakeOsmnxEdgesArgument(graph)
+    monkeypatch.setattr(graph_builder, "_import_osmnx", lambda: fake_osmnx)
+
+    result = graph_builder.build_walking_graph_from_polygon(str(boundary_path))
+
+    assert fake_osmnx.distance.received_edges == [(2, 3, 0)]
+    assert result.edges[1, 2, 0]["distance_m"] == pytest.approx(8.5)
+    assert result.edges[2, 3, 0]["distance_m"] == pytest.approx(17.0)
+
+
+def test_build_walking_graph_preserves_existing_lengths_if_fallback_overwrites_all(tmp_path, monkeypatch):
+    boundary_path = tmp_path / "campus_boundary.geojson"
+    _write_boundary(boundary_path)
+
+    _patch_shapely(monkeypatch)
+    graph = nx.MultiDiGraph()
+    graph.add_edge(1, 2, key=0, length=15.5)
+    graph.add_edge(2, 3, key=0)
+    fake_osmnx = _FakeOsmnxOverwriteAllLengths(graph)
+    monkeypatch.setattr(graph_builder, "_import_osmnx", lambda: fake_osmnx)
+
+    result = graph_builder.build_walking_graph_from_polygon(str(boundary_path))
+
+    assert fake_osmnx.distance.called is True
+    assert result.edges[1, 2, 0]["length"] == pytest.approx(15.5)
+    assert result.edges[1, 2, 0]["distance_m"] == pytest.approx(15.5)
+    assert result.edges[2, 3, 0]["distance_m"] == pytest.approx(99.0)
 
 
 def test_build_walking_graph_uses_top_level_add_edge_lengths_fallback(tmp_path, monkeypatch):
