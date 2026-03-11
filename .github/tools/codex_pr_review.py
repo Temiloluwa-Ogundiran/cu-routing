@@ -9,10 +9,10 @@ from openai import OpenAI
 
 
 COMMENT_MARKER = "<!-- codex-auto-review -->"
-MAX_DIFF_CHARS = 80_000
-MAX_PATCH_CHARS_PER_FILE = 8_000
-MAX_FILES_BLOCK_CHARS = 50_000
-MAX_RETRY_PROMPT_CHARS = 45_000
+MAX_DIFF_CHARS = 40_000
+MAX_PATCH_CHARS_PER_FILE = 4_000
+MAX_FILES_BLOCK_CHARS = 30_000
+MAX_RETRY_PROMPT_CHARS = 20_000
 
 
 def env(name: str) -> str:
@@ -66,13 +66,17 @@ def truncate(value: str, max_chars: int) -> str:
 
 
 def extract_response_text(response: Any) -> str:
-    direct = (getattr(response, "output_text", "") or "").strip()
-    if direct:
-        return direct
+    """Extract text from an OpenAI Responses API result, including partial/incomplete."""
+    # Primary path: SDK provides output_text directly (works for complete AND incomplete).
+    direct = getattr(response, "output_text", None)
+    if direct and str(direct).strip():
+        return str(direct).strip()
 
+    # Fallback: walk output[].content[].text for any shape.
     output = getattr(response, "output", None) or []
     parts: list[str] = []
     for item in output:
+        # Try attribute access first (SDK objects), then dict access.
         content = getattr(item, "content", None)
         if content is None and isinstance(item, dict):
             content = item.get("content") or []
@@ -98,18 +102,15 @@ def response_diagnostic(response: Any) -> str:
 def build_no_blocking_review(summary_note: str = "") -> str:
     cleaned_note = re.sub(r"\s+", " ", summary_note).strip()
     note_line = ""
-    optional_index = 2
     if cleaned_note:
         note_line = f"\n2. Reviewer note: {truncate(cleaned_note, 180)}"
-        optional_index = 3
 
     return (
         "### Codex Review\n"
         "Verdict: APPROVE\n\n"
         "Findings\n"
         "1. No blocking issues found."
-        f"{note_line}\n"
-        f"{optional_index}. Optional improvement: add or verify at least one regression test for the changed behavior.\n\n"
+        f"{note_line}\n\n"
         "Testing\n"
         "- Run the full test suite in CI.\n"
         "- Spot-check changed paths and one edge case."
@@ -128,6 +129,10 @@ def normalize_review_text(review: str) -> str:
     has_testing = "testing" in lower
     has_severity = "severity:" in lower
     has_no_blocking = "no blocking issues found" in lower
+
+    # APPROVE should not include actionable findings.
+    if "verdict: approve" in lower and has_severity:
+        return build_no_blocking_review()
 
     if has_header and has_verdict and has_findings and has_testing and (has_severity or has_no_blocking):
         return text
@@ -179,8 +184,10 @@ def build_prompt(pr: dict[str, Any], files: list[dict[str, Any]], diff: str) -> 
 
     return f"""
 You are reviewing a GitHub pull request for correctness, reliability, and maintainability.
-Focus on bugs, regressions, missing validation, and missing tests.
+Focus on high-confidence bugs, regressions, missing validation, and missing tests.
 Be strict but beginner-friendly in tone.
+Do not include style, naming, or documentation nits unless they have clear runtime or correctness impact.
+Avoid speculative findings.
 
 Repository PR metadata:
 - Title: {title}
@@ -205,7 +212,7 @@ Output requirements (Markdown):
      - Why it matters
      - Clear suggested fix
 4. Then "Testing" section listing tests to add/run.
-5. If no significant issues, say "No blocking issues found." and still include lightweight suggestions.
+5. If no significant issues, say "No blocking issues found." and do not invent optional suggestions.
 6. Do not include extra preamble before "### Codex Review".
 7. Keep the whole response under 350 words.
 
@@ -255,14 +262,22 @@ def make_review(openai_api_key: str, model: str, prompt: str) -> str:
             response = client.responses.create(
                 model=model,
                 input=input_payload,
-                max_output_tokens=4096,
+                max_output_tokens=8192,
+                truncation="auto",
             )
         except Exception as exc:
             diagnostics.append(f"api_error={exc}")
             continue
+
         text = extract_response_text(response)
+
+        # Accept partial text from incomplete responses instead of discarding.
+        status = getattr(response, "status", "completed")
         if text:
+            if status == "incomplete":
+                text += "\n\n_[Review truncated by token limit.]_"
             return normalize_review_text(text)
+
         diagnostics.append(response_diagnostic(response))
 
     diag_text = "; ".join(diagnostics) if diagnostics else "status=unknown"
@@ -320,7 +335,7 @@ def main() -> None:
     comment_body = f"{COMMENT_MARKER}\n{review}{footer}"
     upsert_issue_comment(repo, pr_number, github_token, comment_body)
 
-    # Fail the check if the verdict is not APPROVE.
+    # Fail the check unless the verdict is APPROVE.
     if "Verdict: APPROVE" not in review:
         raise SystemExit(
             "Codex review did not approve. Check the PR comment for details.")
