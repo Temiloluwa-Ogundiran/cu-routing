@@ -75,16 +75,15 @@ def extract_response_text(response: Any) -> str:
     for item in output:
         content = getattr(item, "content", None)
         if content is None and isinstance(item, dict):
-            content = item.get("content", [])
+            content = item.get("content") or []
         for chunk in content or []:
+            text = ""
             if isinstance(chunk, dict):
-                chunk_type = chunk.get("type")
-                chunk_text = chunk.get("text") or ""
+                text = chunk.get("text", "")
             else:
-                chunk_type = getattr(chunk, "type", None)
-                chunk_text = getattr(chunk, "text", "") or ""
-            if chunk_type in {"output_text", "text"} and str(chunk_text).strip():
-                parts.append(str(chunk_text).strip())
+                text = getattr(chunk, "text", "")
+            if text and str(text).strip():
+                parts.append(str(text).strip())
     return "\n".join(parts).strip()
 
 
@@ -208,7 +207,7 @@ Output requirements (Markdown):
 4. Then "Testing" section listing tests to add/run.
 5. If no significant issues, say "No blocking issues found." and still include lightweight suggestions.
 6. Do not include extra preamble before "### Codex Review".
-7. Keep the whole response under 220 words.
+7. Keep the whole response under 350 words.
 
 Keep response concise and actionable.
 """.strip()
@@ -217,47 +216,54 @@ Keep response concise and actionable.
 def make_review(openai_api_key: str, model: str, prompt: str) -> str:
     client = OpenAI(api_key=openai_api_key)
     system_prompt = "You are Codex, an expert code reviewer."
-    input_payload = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": prompt},
-    ]
     diagnostics: list[str] = []
+    retry_nudge = (
+        "Your previous response was empty. "
+        "Return the Markdown review now using the required format."
+    )
 
-    for attempt in range(3):
-        response = client.responses.create(
-            model=model,
-            input=input_payload,
-            max_output_tokens=2200,
-        )
+    attempts = [
+        # Attempt 0: full prompt
+        [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt},
+        ],
+        # Attempt 1: compacted prompt + nudge
+        [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": truncate(
+                prompt, MAX_RETRY_PROMPT_CHARS)},
+            {"role": "user", "content": retry_nudge},
+        ],
+        # Attempt 2: minimal prompt
+        [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": truncate(
+                prompt, MAX_RETRY_PROMPT_CHARS)},
+            {
+                "role": "user",
+                "content": (
+                    "Do not leave the response blank. "
+                    "If unsure, return 'Verdict: COMMENT' with at least one suggestion."
+                ),
+            },
+        ],
+    ]
+
+    for input_payload in attempts:
+        try:
+            response = client.responses.create(
+                model=model,
+                input=input_payload,
+                max_output_tokens=4096,
+            )
+        except Exception as exc:
+            diagnostics.append(f"api_error={exc}")
+            continue
         text = extract_response_text(response)
         if text:
             return normalize_review_text(text)
         diagnostics.append(response_diagnostic(response))
-
-        # Retry with a compacted prompt to reduce response dropout on large diffs.
-        if attempt == 0:
-            compact_prompt = truncate(prompt, MAX_RETRY_PROMPT_CHARS)
-            input_payload = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": compact_prompt},
-                {
-                    "role": "user",
-                    "content": (
-                        "Your previous response was empty. "
-                        "Return the Markdown review now using the required format."
-                    ),
-                },
-            ]
-        else:
-            input_payload.append(
-                {
-                    "role": "user",
-                    "content": (
-                        "Do not leave the response blank. "
-                        "If unsure, return 'Verdict: COMMENT' with at least one non-blocking suggestion."
-                    ),
-                }
-            )
 
     diag_text = "; ".join(diagnostics) if diagnostics else "status=unknown"
     return (
