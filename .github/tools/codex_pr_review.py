@@ -114,6 +114,28 @@ def build_no_blocking_review() -> str:
     )
 
 
+def _correct_verdict(text: str) -> str:
+    """Override the verdict if it contradicts the severity of findings."""
+    has_p0_p1 = bool(re.search(r"\bP[01]\b", text))
+    has_p2 = bool(re.search(r"\bP2\b", text))
+
+    if has_p0_p1:
+        required = "REQUEST_CHANGES"
+    elif has_p2:
+        required = "COMMENT"
+    else:
+        return text
+
+    # Replace only the verdict line, preserving surrounding text.
+    corrected = re.sub(
+        r"(?im)^(Verdict:\s*)(?:APPROVE|COMMENT|REQUEST_CHANGES)",
+        rf"\g<1>{required}",
+        text,
+        count=1,
+    )
+    return corrected
+
+
 def normalize_review_text(review: str) -> str:
     """Ensure the review follows the expected Markdown structure."""
     text = (review or "").strip()
@@ -129,9 +151,9 @@ def normalize_review_text(review: str) -> str:
         r"\bP[0-3]\b", text) is not None
     has_no_blocking = "no blocking issues" in lower
 
-    # Accept well-formed output as-is.
+    # Accept well-formed output, but fix verdict if it contradicts findings.
     if has_header and has_verdict and has_findings and has_testing and (has_severity or has_no_blocking):
-        return text
+        return _correct_verdict(text)
 
     # If the model explicitly says no blocking issues and nothing else is structured,
     # return the canonical approve template.
