@@ -1,0 +1,139 @@
+name: Auto Assign Issue Claims
+
+on:
+  issue_comment:
+    types:
+      - created
+
+concurrency:
+  group: issue-claim-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  auto-assign:
+    if: >-
+      github.event.issue.pull_request == null &&
+      startsWith(github.event.comment.body, '/take')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Assign issue to commenter
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const issueNumber = context.payload.issue.number;
+            const commenter = context.payload.comment.user.login;
+            const commenterType = context.payload.comment.user.type;
+
+            if (commenterType === "Bot") {
+              core.info("Skipping bot commenter.");
+              return;
+            }
+
+            const issueResp = await github.rest.issues.get({
+              owner,
+              repo,
+              issue_number: issueNumber
+            });
+            const issue = issueResp.data;
+
+            if (issue.state !== "open") {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: issueNumber,
+                body: `@${commenter} this issue is closed, so I could not assign it.`
+              });
+              return;
+            }
+
+            const assignees = issue.assignees || [];
+            if (assignees.length > 0) {
+              const mentions = assignees.map((a) => `@${a.login}`).join(", ");
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: issueNumber,
+                body: `@${commenter} this issue is already assigned to ${mentions}.`
+              });
+              return;
+            }
+
+            async function ensureLabel(name, color, description) {
+              try {
+                await github.rest.issues.getLabel({ owner, repo, name });
+              } catch (error) {
+                if (error.status === 404) {
+                  await github.rest.issues.createLabel({
+                    owner,
+                    repo,
+                    name,
+                    color,
+                    description
+                  });
+                  return;
+                }
+                throw error;
+              }
+            }
+
+            await ensureLabel("in-progress", "FBCA04", "Issue is actively being worked on");
+
+            await github.rest.issues.addAssignees({
+              owner,
+              repo,
+              issue_number: issueNumber,
+              assignees: [commenter]
+            });
+
+            await github.rest.issues.addLabels({
+              owner,
+              repo,
+              issue_number: issueNumber,
+              labels: ["in-progress"]
+            });
+
+            for (const label of ["ready", "available"]) {
+              try {
+                await github.rest.issues.removeLabel({
+                  owner,
+                  repo,
+                  issue_number: issueNumber,
+                  name: label
+                });
+              } catch (error) {
+                if (error.status !== 404) {
+                  throw error;
+                }
+              }
+            }
+
+            const slug = (issue.title || "task")
+              .toLowerCase()
+              .replace(/[^a-z0-9]+/g, "-")
+              .replace(/^-+|-+$/g, "")
+              .slice(0, 36) || "task";
+            const branchName = `issue-${issueNumber}-${slug}`;
+
+            const guidance = [
+              `@${commenter} assigned successfully.`,
+              "",
+              "**Next steps**",
+              `1. Sync your fork with \`main\`.`,
+              `2. Create a branch in your fork: \`${branchName}\`.`,
+              `3. Make only the changes for this issue.`,
+              `4. Open a PR to \`main\` and include \`Closes #${issueNumber}\` in the PR description.`,
+              "5. Wait for CI checks and maintainer review."
+            ].join("\n");
+
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number: issueNumber,
+              body: guidance
+            });

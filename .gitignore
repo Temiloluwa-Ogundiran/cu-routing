@@ -4,6 +4,7 @@ AGENTS.md
 
 # Local planning and orchestration artifacts
 tasks/
+plans/
 scripts/
 docs/issues/seed-issues.md
 docs/issues/seed-issues.json
