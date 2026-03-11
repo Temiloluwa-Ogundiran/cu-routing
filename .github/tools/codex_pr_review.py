@@ -32,11 +32,28 @@ def gh_request(
         "Accept": accept,
         "X-GitHub-Api-Version": "2022-11-28",
     }
-    response = requests.request(method, url, headers=headers, json=payload, timeout=60)
+    response = requests.request(
+        method, url, headers=headers, json=payload, timeout=60)
     response.raise_for_status()
     if accept.endswith(".diff"):
         return response.text
     return response.json()
+
+
+def gh_request_paginated(url: str, token: str) -> list[dict[str, Any]]:
+    """Fetch all pages of a GitHub list endpoint."""
+    results: list[dict[str, Any]] = []
+    while url:
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+        response = requests.get(url, headers=headers, timeout=60)
+        response.raise_for_status()
+        results.extend(response.json())
+        url = response.links.get("next", {}).get("url")
+    return results
 
 
 def truncate(value: str, max_chars: int) -> str:
@@ -150,8 +167,9 @@ def main() -> None:
     files_url = f"{pr_url}/files?per_page=100"
 
     pr = gh_request("GET", pr_url, github_token)
-    files = gh_request("GET", files_url, github_token)
-    diff = gh_request("GET", pr_url, github_token, accept="application/vnd.github.v3.diff")
+    files = gh_request_paginated(files_url, github_token)
+    diff = gh_request("GET", pr_url, github_token,
+                      accept="application/vnd.github.v3.diff")
 
     prompt = build_prompt(pr, files, diff)
     review = make_review(openai_api_key, model, prompt)
