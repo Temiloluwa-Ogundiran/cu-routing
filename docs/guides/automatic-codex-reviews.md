@@ -30,3 +30,6 @@ This repository can run automated Codex reviews on every pull request.
 2. Wait for `Codex PR Review` workflow comment.
 3. Use findings to request fixes.
 4. Re-check after contributor pushes updates.
+
+## Smoke Test Note
+- This section was added in a dedicated PR to verify the automated reviewer trigger.
