@@ -9,10 +9,10 @@ from openai import OpenAI
 
 
 COMMENT_MARKER = "<!-- codex-auto-review -->"
-MAX_DIFF_CHARS = 80_000
-MAX_PATCH_CHARS_PER_FILE = 8_000
-MAX_FILES_BLOCK_CHARS = 50_000
-MAX_RETRY_PROMPT_CHARS = 45_000
+MAX_DIFF_CHARS = 40_000
+MAX_PATCH_CHARS_PER_FILE = 4_000
+MAX_FILES_BLOCK_CHARS = 30_000
+MAX_RETRY_PROMPT_CHARS = 20_000
 
 
 def env(name: str) -> str:
@@ -66,13 +66,17 @@ def truncate(value: str, max_chars: int) -> str:
 
 
 def extract_response_text(response: Any) -> str:
-    direct = (getattr(response, "output_text", "") or "").strip()
-    if direct:
-        return direct
+    """Extract text from an OpenAI Responses API result, including partial/incomplete."""
+    # Primary path: SDK provides output_text directly (works for complete AND incomplete).
+    direct = getattr(response, "output_text", None)
+    if direct and str(direct).strip():
+        return str(direct).strip()
 
+    # Fallback: walk output[].content[].text for any shape.
     output = getattr(response, "output", None) or []
     parts: list[str] = []
     for item in output:
+        # Try attribute access first (SDK objects), then dict access.
         content = getattr(item, "content", None)
         if content is None and isinstance(item, dict):
             content = item.get("content") or []
@@ -255,14 +259,22 @@ def make_review(openai_api_key: str, model: str, prompt: str) -> str:
             response = client.responses.create(
                 model=model,
                 input=input_payload,
-                max_output_tokens=4096,
+                max_output_tokens=8192,
+                truncation="auto",
             )
         except Exception as exc:
             diagnostics.append(f"api_error={exc}")
             continue
+
         text = extract_response_text(response)
+
+        # Accept partial text from incomplete responses instead of discarding.
+        status = getattr(response, "status", "completed")
         if text:
+            if status == "incomplete":
+                text += "\n\n_[Review truncated by token limit.]_"
             return normalize_review_text(text)
+
         diagnostics.append(response_diagnostic(response))
 
     diag_text = "; ".join(diagnostics) if diagnostics else "status=unknown"
