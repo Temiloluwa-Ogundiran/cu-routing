@@ -40,6 +40,7 @@ This repo is optimized for beginner contributors.
 ## Merge Rules
 - Squash and merge preferred for clean history.
 - Merge only when all required checks pass.
+- `Run Tests` GitHub Action must pass before merge.
 - If conflicts exist, ask contributor to rebase/merge latest `main`.
 - `main` branch is protected:
   - Pull request required before merge.
