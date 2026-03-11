@@ -8,9 +8,10 @@ from openai import OpenAI
 
 
 COMMENT_MARKER = "<!-- codex-auto-review -->"
-MAX_DIFF_CHARS = 120_000
-MAX_PATCH_CHARS_PER_FILE = 12_000
-MAX_FILES_BLOCK_CHARS = 80_000
+MAX_DIFF_CHARS = 80_000
+MAX_PATCH_CHARS_PER_FILE = 8_000
+MAX_FILES_BLOCK_CHARS = 50_000
+MAX_RETRY_PROMPT_CHARS = 45_000
 
 
 def env(name: str) -> str:
@@ -86,6 +87,14 @@ def extract_response_text(response: Any) -> str:
     return "\n".join(parts).strip()
 
 
+def response_diagnostic(response: Any) -> str:
+    status = getattr(response, "status", "unknown")
+    incomplete = getattr(response, "incomplete_details", None)
+    if incomplete:
+        return f"status={status}, incomplete={incomplete}"
+    return f"status={status}"
+
+
 def build_prompt(pr: dict[str, Any], files: list[dict[str, Any]], diff: str) -> str:
     changed_files_summary = []
     for file in files:
@@ -142,34 +151,59 @@ Keep response concise and actionable.
 
 def make_review(openai_api_key: str, model: str, prompt: str) -> str:
     client = OpenAI(api_key=openai_api_key)
+    system_prompt = "You are Codex, an expert code reviewer."
     input_payload = [
-        {
-            "role": "system",
-            "content": "You are Codex, an expert code reviewer.",
-        },
-        {
-            "role": "user",
-            "content": prompt,
-        },
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": prompt},
     ]
+    diagnostics: list[str] = []
 
-    for _ in range(2):
+    for attempt in range(3):
         response = client.responses.create(
             model=model,
             input=input_payload,
-            max_output_tokens=1200,
+            max_output_tokens=2200,
         )
         text = extract_response_text(response)
         if text:
             return text
-        input_payload.append(
-            {
-                "role": "user",
-                "content": "Return a plain Markdown review now using the required format.",
-            }
-        )
+        diagnostics.append(response_diagnostic(response))
 
-    return "### Codex Review\nVerdict: COMMENT\n\nFindings\n1. Severity: P2 | File: N/A | Model returned an empty response body.\n\nTesting\n- Re-run workflow."
+        # Retry with a compacted prompt to reduce response dropout on large diffs.
+        if attempt == 0:
+            compact_prompt = truncate(prompt, MAX_RETRY_PROMPT_CHARS)
+            input_payload = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": compact_prompt},
+                {
+                    "role": "user",
+                    "content": (
+                        "Your previous response was empty. "
+                        "Return the Markdown review now using the required format."
+                    ),
+                },
+            ]
+        else:
+            input_payload.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "Do not leave the response blank. "
+                        "If unsure, return 'Verdict: COMMENT' with at least one non-blocking suggestion."
+                    ),
+                }
+            )
+
+    diag_text = "; ".join(diagnostics) if diagnostics else "status=unknown"
+    return (
+        "### Codex Review\n"
+        "Verdict: COMMENT\n\n"
+        "Findings\n"
+        "1. Severity: P2 | File: N/A | Model returned an empty response body.\n"
+        f"2. Severity: P3 | File: N/A | Response diagnostics: {diag_text}\n\n"
+        "Testing\n"
+        "- Re-run workflow."
+    )
 
 
 def upsert_issue_comment(repo: str, pr_number: str, token: str, body: str) -> None:
