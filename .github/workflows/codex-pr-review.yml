@@ -19,9 +19,7 @@ permissions:
 
 jobs:
   codex-review:
-    if: >-
-      !github.event.pull_request.draft &&
-      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout default branch workflow files
