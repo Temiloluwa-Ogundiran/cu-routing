@@ -19,7 +19,9 @@ permissions:
 
 jobs:
   codex-review:
-    if: ${{ !github.event.pull_request.draft }}
+    if: >-
+      !github.event.pull_request.draft &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout default branch workflow files
@@ -44,5 +46,5 @@ jobs:
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_ACTION: ${{ github.event.action }}
-          OPENAI_MODEL: gpt-5-mini
+          OPENAI_MODEL: ${{ vars.OPENAI_REVIEW_MODEL }}
         run: python .github/tools/codex_pr_review.py
