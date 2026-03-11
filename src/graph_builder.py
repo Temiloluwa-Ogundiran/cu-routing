@@ -34,10 +34,28 @@ def _is_coordinate_sequence(value: Any) -> bool:
     return isinstance(value, (list, tuple))
 
 
+def _is_numeric_coordinate(value: Any) -> bool:
+    if isinstance(value, bool):
+        return False
+    return isinstance(value, (int, float)) and math.isfinite(float(value))
+
+
+def _is_valid_point_coordinates(point: Any) -> bool:
+    if not _is_coordinate_sequence(point) or len(point) < 2:
+        return False
+    return _is_numeric_coordinate(point[0]) and _is_numeric_coordinate(point[1])
+
+
 def _has_valid_ring_coordinates(ring: Any) -> bool:
     if not _is_coordinate_sequence(ring) or len(ring) < 4:
         return False
-    return all(_is_coordinate_sequence(point) and len(point) >= 2 for point in ring)
+
+    if not all(_is_valid_point_coordinates(point) for point in ring):
+        return False
+
+    first_point = ring[0]
+    last_point = ring[-1]
+    return first_point[0] == last_point[0] and first_point[1] == last_point[1]
 
 
 def _has_valid_polygon_coordinates(geometry_type: str, coordinates: Any) -> bool:
@@ -45,15 +63,17 @@ def _has_valid_polygon_coordinates(geometry_type: str, coordinates: Any) -> bool
         return False
 
     if geometry_type == "Polygon":
-        return any(_has_valid_ring_coordinates(ring) for ring in coordinates)
+        return all(_has_valid_ring_coordinates(ring) for ring in coordinates)
 
     if geometry_type == "MultiPolygon":
+        has_polygons = False
         for polygon in coordinates:
             if not _is_coordinate_sequence(polygon) or not polygon:
-                continue
-            if any(_has_valid_ring_coordinates(ring) for ring in polygon):
-                return True
-        return False
+                return False
+            if not all(_has_valid_ring_coordinates(ring) for ring in polygon):
+                return False
+            has_polygons = True
+        return has_polygons
 
     return False
 
@@ -241,20 +261,17 @@ def _fill_missing_edge_lengths(graph: nx.MultiDiGraph, ox: Any) -> nx.MultiDiGra
     if returned_graph is not None:
         graph = returned_graph
 
-    if not supports_edges_argument:
-        # Some OSMnx variants only support add_edge_lengths(graph), which may
-        # recompute every edge length. In that broad fallback path we keep
-        # originally-present lengths to avoid silently altering trusted values
-        # when only a subset of edges was missing.
-        for edge_key, original_length in preserved_lengths.items():
-            source, target, key = edge_key
-            if graph.has_edge(source, target, key):
-                graph.edges[source, target, key]["length"] = original_length
+    # Preserve trusted existing lengths regardless of which API path ran.
+    # Some implementations can ignore `edges=` and overwrite every length.
+    for edge_key, original_length in preserved_lengths.items():
+        source, target, key = edge_key
+        if graph.has_edge(source, target, key):
+            graph.edges[source, target, key]["length"] = original_length
 
     return graph
 
 
-def _normalise_edge_distances(graph: nx.MultiDiGraph) -> None:
+def _normalize_edge_distances(graph: nx.MultiDiGraph) -> None:
     """Normalize edge lengths to `distance_m` while preserving original `length`.
 
     We intentionally keep both fields:
@@ -279,6 +296,11 @@ def _normalise_edge_distances(graph: nx.MultiDiGraph) -> None:
         edge_data["distance_m"] = length_m
 
 
+def _normalise_edge_distances(graph: nx.MultiDiGraph) -> None:
+    """Backward-compatible alias using UK spelling."""
+    _normalize_edge_distances(graph)
+
+
 def build_walking_graph_from_polygon(polygon_geojson_path: str) -> nx.MultiDiGraph:
     """Load a campus boundary GeoJSON and fetch the walking graph from OSMnx.
 
@@ -293,5 +315,5 @@ def build_walking_graph_from_polygon(polygon_geojson_path: str) -> nx.MultiDiGra
 
     graph = _fill_missing_edge_lengths(graph, ox)
 
-    _normalise_edge_distances(graph)
+    _normalize_edge_distances(graph)
     return graph
