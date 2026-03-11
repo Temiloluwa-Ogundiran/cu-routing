@@ -15,7 +15,7 @@ Team project for learning Git collaboration while building a data-science routin
 
 ## Team Workflow (Beginner Friendly)
 1. Fork this repo.
-2. Pick an open issue.
+2. Pick an open issue and comment `/take` to claim it.
 3. Create a branch in your fork.
 4. Make only the requested change.
 5. Open a PR to this repo.

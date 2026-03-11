@@ -5,7 +5,13 @@ This project is designed for beginners. Small PRs are preferred.
 ## Before You Start
 1. Read [docs/guides/git-beginner-guide.md](docs/guides/git-beginner-guide.md)
 2. Pick an issue from [docs/issues/seed-issues.md](docs/issues/seed-issues.md) or GitHub Issues.
-3. Comment on the issue to request assignment.
+3. Comment `/take` on the issue to request assignment.
+
+## Auto Assignment
+- Comment `/take` on an open, unassigned issue.
+- The workflow assigns the issue to you automatically.
+- The workflow adds `in-progress` and removes `ready` / `available` labels when present.
+- The workflow posts branch and PR next-step instructions.
 
 ## Branch Naming
 Use one of:
