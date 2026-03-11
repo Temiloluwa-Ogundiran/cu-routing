@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from typing import Any
 
 import requests
@@ -95,6 +96,67 @@ def response_diagnostic(response: Any) -> str:
     return f"status={status}"
 
 
+def build_no_blocking_review(summary_note: str = "") -> str:
+    cleaned_note = re.sub(r"\s+", " ", summary_note).strip()
+    note_line = ""
+    optional_index = 2
+    if cleaned_note:
+        note_line = f"\n2. Reviewer note: {truncate(cleaned_note, 180)}"
+        optional_index = 3
+
+    return (
+        "### Codex Review\n"
+        "Verdict: APPROVE\n\n"
+        "Findings\n"
+        "1. No blocking issues found."
+        f"{note_line}\n"
+        f"{optional_index}. Optional improvement: add or verify at least one regression test for the changed behavior.\n\n"
+        "Testing\n"
+        "- Run the full test suite in CI.\n"
+        "- Spot-check changed paths and one edge case."
+    )
+
+
+def normalize_review_text(review: str) -> str:
+    text = (review or "").strip()
+    if not text:
+        return build_no_blocking_review()
+
+    lower = text.lower()
+    has_header = "### codex review" in lower
+    has_verdict = "verdict:" in lower
+    has_findings = "findings" in lower
+    has_testing = "testing" in lower
+    has_severity = "severity:" in lower
+    has_no_blocking = "no blocking issues found" in lower
+
+    if has_header and has_verdict and has_findings and has_testing and (has_severity or has_no_blocking):
+        return text
+
+    positive_markers = [
+        "well-structured",
+        "strong implementation",
+        "comprehensive",
+        "no issues",
+        "looks good",
+    ]
+    inferred_no_blocking = has_no_blocking or (
+        not has_severity and any(marker in lower for marker in positive_markers)
+    )
+    if inferred_no_blocking:
+        return build_no_blocking_review(text)
+
+    return (
+        "### Codex Review\n"
+        "Verdict: COMMENT\n\n"
+        "Findings\n"
+        "1. Severity: P2 | File: N/A | Review output format was incomplete or invalid.\n"
+        "2. Severity: P3 | File: N/A | Re-run workflow to generate structured findings.\n\n"
+        "Testing\n"
+        "- Re-run workflow."
+    )
+
+
 def build_prompt(pr: dict[str, Any], files: list[dict[str, Any]], diff: str) -> str:
     changed_files_summary = []
     for file in files:
@@ -144,6 +206,8 @@ Output requirements (Markdown):
      - Clear suggested fix
 4. Then "Testing" section listing tests to add/run.
 5. If no significant issues, say "No blocking issues found." and still include lightweight suggestions.
+6. Do not include extra preamble before "### Codex Review".
+7. Keep the whole response under 220 words.
 
 Keep response concise and actionable.
 """.strip()
@@ -166,7 +230,7 @@ def make_review(openai_api_key: str, model: str, prompt: str) -> str:
         )
         text = extract_response_text(response)
         if text:
-            return text
+            return normalize_review_text(text)
         diagnostics.append(response_diagnostic(response))
 
         # Retry with a compacted prompt to reduce response dropout on large diffs.
