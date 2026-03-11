@@ -9,6 +9,9 @@ from typing import Any
 import networkx as nx
 
 
+SUPPORTED_BOUNDARY_GEOMETRY_TYPES = {"Polygon", "MultiPolygon"}
+
+
 def _import_osmnx() -> Any:
     try:
         import osmnx as ox
@@ -25,19 +28,49 @@ def _import_shapely_geometry() -> tuple[Any, Any, Any]:
     return MultiPolygon, Polygon, shape
 
 
-def _extract_geometry(payload: dict[str, Any]) -> dict[str, Any] | None:
+def _is_polygon_geometry_mapping(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    geometry_type = value.get("type")
+    coordinates = value.get("coordinates")
+    return geometry_type in SUPPORTED_BOUNDARY_GEOMETRY_TYPES and coordinates is not None
+
+
+def _extract_geometry(payload: dict[str, Any]) -> tuple[dict[str, Any] | None, bool]:
     payload_type = payload.get("type")
+
     if payload_type == "FeatureCollection":
-        features = payload.get("features") or []
-        if not features:
-            return None
-        first_feature = features[0] or {}
-        return first_feature.get("geometry")
+        features = payload.get("features")
+        if not isinstance(features, list) or not features:
+            return None, False
+
+        saw_invalid_geometry = False
+        for feature in features:
+            if not isinstance(feature, dict) or feature.get("type") != "Feature":
+                continue
+            geometry = feature.get("geometry")
+            if geometry is None:
+                continue
+            if _is_polygon_geometry_mapping(geometry):
+                return geometry, False
+            if isinstance(geometry, dict):
+                saw_invalid_geometry = True
+        return None, saw_invalid_geometry
+
     if payload_type == "Feature":
-        return payload.get("geometry")
-    if payload_type in {"Polygon", "MultiPolygon"}:
-        return payload
-    return payload.get("geometry")
+        geometry = payload.get("geometry")
+        if geometry is None:
+            return None, False
+        if _is_polygon_geometry_mapping(geometry):
+            return geometry, False
+        return None, isinstance(geometry, dict)
+
+    if payload_type in SUPPORTED_BOUNDARY_GEOMETRY_TYPES:
+        if _is_polygon_geometry_mapping(payload):
+            return payload, False
+        return None, True
+
+    return None, False
 
 
 def _load_boundary_polygon(polygon_geojson_path: str) -> Any:
@@ -45,18 +78,29 @@ def _load_boundary_polygon(polygon_geojson_path: str) -> Any:
     if not boundary_path.exists():
         raise FileNotFoundError(f"Boundary file does not exist: {boundary_path}")
 
-    payload = json.loads(boundary_path.read_text(encoding="utf-8"))
-    geometry = _extract_geometry(payload)
+    try:
+        payload = json.loads(boundary_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError("Invalid boundary GeoJSON: file is not valid JSON.") from exc
+
+    if not isinstance(payload, dict):
+        raise ValueError("Invalid boundary GeoJSON: top-level value must be an object.")
+
+    geometry, saw_invalid_geometry = _extract_geometry(payload)
     if geometry is None:
+        if saw_invalid_geometry:
+            raise ValueError("Boundary geometry is not a valid GeoJSON geometry.")
         raise ValueError("No polygon geometry found in boundary file.")
 
     multipolygon_cls, polygon_cls, shape = _import_shapely_geometry()
-    polygon = shape(geometry)
+    try:
+        polygon = shape(geometry)
+    except Exception as exc:
+        raise ValueError("Boundary geometry is not a valid GeoJSON geometry.") from exc
+
     if polygon.is_empty:
         raise ValueError("Boundary geometry is empty.")
-    if isinstance(polygon, multipolygon_cls):
-        polygon = max(polygon.geoms, key=lambda geom: geom.area)
-    if not isinstance(polygon, polygon_cls):
+    if not isinstance(polygon, (polygon_cls, multipolygon_cls)):
         raise ValueError("Boundary geometry must be Polygon or MultiPolygon.")
 
     return polygon

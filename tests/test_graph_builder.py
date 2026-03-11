@@ -39,14 +39,18 @@ class _FakePolygon:
 
 
 class _FakeMultiPolygon:
+    geom_type = "MultiPolygon"
+    is_empty = False
     geoms = ()
 
 
-def _patch_shapely(monkeypatch) -> None:
+def _patch_shapely(monkeypatch, *, shape_fn=None) -> None:
+    if shape_fn is None:
+        shape_fn = lambda _: _FakePolygon()
     monkeypatch.setattr(
         graph_builder,
         "_import_shapely_geometry",
-        lambda: (_FakeMultiPolygon, _FakePolygon, lambda _: _FakePolygon()),
+        lambda: (_FakeMultiPolygon, _FakePolygon, shape_fn),
     )
 
 
@@ -116,3 +120,69 @@ def test_build_walking_graph_rejects_invalid_geojson(tmp_path):
 
     with pytest.raises(ValueError, match="No polygon geometry"):
         graph_builder.build_walking_graph_from_polygon(str(invalid_boundary_path))
+
+
+def test_load_boundary_polygon_rejects_invalid_json(tmp_path):
+    invalid_boundary_path = tmp_path / "campus_boundary.geojson"
+    invalid_boundary_path.write_text("this is not json", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Invalid boundary GeoJSON"):
+        graph_builder._load_boundary_polygon(str(invalid_boundary_path))
+
+
+def test_load_boundary_polygon_rejects_malformed_geometry_mapping(tmp_path):
+    invalid_geometry_path = tmp_path / "campus_boundary.geojson"
+    invalid_geometry_path.write_text(
+        json.dumps({"type": "Feature", "geometry": {"coordinates": []}}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Boundary geometry is not a valid GeoJSON geometry"):
+        graph_builder._load_boundary_polygon(str(invalid_geometry_path))
+
+
+def test_load_boundary_polygon_searches_feature_collection_beyond_first(tmp_path, monkeypatch):
+    boundary_path = tmp_path / "campus_boundary.geojson"
+    payload = {
+        "type": "FeatureCollection",
+        "features": [
+            {"type": "Feature", "geometry": {"type": "Point", "coordinates": [3.15, 6.67]}},
+            {
+                "type": "Feature",
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [[[3.146, 6.669], [3.161, 6.669], [3.161, 6.678], [3.146, 6.678], [3.146, 6.669]]],
+                },
+            },
+        ],
+    }
+    boundary_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    seen = {}
+
+    def _shape_fn(geometry):
+        seen["geometry"] = geometry
+        return _FakePolygon()
+
+    _patch_shapely(monkeypatch, shape_fn=_shape_fn)
+    polygon = graph_builder._load_boundary_polygon(str(boundary_path))
+
+    assert isinstance(polygon, _FakePolygon)
+    assert seen["geometry"]["type"] == "Polygon"
+
+
+def test_load_boundary_polygon_preserves_multipolygon(tmp_path, monkeypatch):
+    boundary_path = tmp_path / "campus_boundary.geojson"
+    payload = {
+        "type": "MultiPolygon",
+        "coordinates": [
+            [[[3.14, 6.66], [3.145, 6.66], [3.145, 6.665], [3.14, 6.665], [3.14, 6.66]]],
+            [[[3.15, 6.67], [3.16, 6.67], [3.16, 6.68], [3.15, 6.68], [3.15, 6.67]]],
+        ],
+    }
+    boundary_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    _patch_shapely(monkeypatch, shape_fn=lambda _: _FakeMultiPolygon())
+    geometry = graph_builder._load_boundary_polygon(str(boundary_path))
+
+    assert isinstance(geometry, _FakeMultiPolygon)
