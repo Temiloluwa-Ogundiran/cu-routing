@@ -63,6 +63,29 @@ def truncate(value: str, max_chars: int) -> str:
     return f"{value[:max_chars]}\n\n[...truncated for size...]"
 
 
+def extract_response_text(response: Any) -> str:
+    direct = (getattr(response, "output_text", "") or "").strip()
+    if direct:
+        return direct
+
+    output = getattr(response, "output", None) or []
+    parts: list[str] = []
+    for item in output:
+        content = getattr(item, "content", None)
+        if content is None and isinstance(item, dict):
+            content = item.get("content", [])
+        for chunk in content or []:
+            if isinstance(chunk, dict):
+                chunk_type = chunk.get("type")
+                chunk_text = chunk.get("text") or ""
+            else:
+                chunk_type = getattr(chunk, "type", None)
+                chunk_text = getattr(chunk, "text", "") or ""
+            if chunk_type in {"output_text", "text"} and str(chunk_text).strip():
+                parts.append(str(chunk_text).strip())
+    return "\n".join(parts).strip()
+
+
 def build_prompt(pr: dict[str, Any], files: list[dict[str, Any]], diff: str) -> str:
     changed_files_summary = []
     for file in files:
@@ -119,24 +142,34 @@ Keep response concise and actionable.
 
 def make_review(openai_api_key: str, model: str, prompt: str) -> str:
     client = OpenAI(api_key=openai_api_key)
-    response = client.responses.create(
-        model=model,
-        input=[
-            {
-                "role": "system",
-                "content": "You are Codex, an expert code reviewer.",
-            },
+    input_payload = [
+        {
+            "role": "system",
+            "content": "You are Codex, an expert code reviewer.",
+        },
+        {
+            "role": "user",
+            "content": prompt,
+        },
+    ]
+
+    for _ in range(2):
+        response = client.responses.create(
+            model=model,
+            input=input_payload,
+            max_output_tokens=1200,
+        )
+        text = extract_response_text(response)
+        if text:
+            return text
+        input_payload.append(
             {
                 "role": "user",
-                "content": prompt,
-            },
-        ],
-        max_output_tokens=1200,
-    )
-    text = (response.output_text or "").strip()
-    if not text:
-        return "### Codex Review\nVerdict: COMMENT\n\nFindings\n1. Severity: P2 | File: N/A | Could not parse model output. Retry this workflow.\n\nTesting\n- Re-run workflow."
-    return text
+                "content": "Return a plain Markdown review now using the required format.",
+            }
+        )
+
+    return "### Codex Review\nVerdict: COMMENT\n\nFindings\n1. Severity: P2 | File: N/A | Model returned an empty response body.\n\nTesting\n- Re-run workflow."
 
 
 def upsert_issue_comment(repo: str, pr_number: str, token: str, body: str) -> None:
@@ -164,7 +197,7 @@ def main() -> None:
     repo = env("REPO")
     pr_number = env("PR_NUMBER")
     pr_action = os.getenv("PR_ACTION", "unknown")
-    model = os.getenv("OPENAI_MODEL", "").strip() or "gpt-5-mini"
+    model = os.getenv("OPENAI_MODEL", "").strip() or "gpt-5"
 
     pr_url = f"https://api.github.com/repos/{repo}/pulls/{pr_number}"
     files_url = f"{pr_url}/files?per_page=100"
