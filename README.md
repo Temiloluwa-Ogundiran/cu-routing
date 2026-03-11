@@ -24,8 +24,7 @@ Team project for learning Git collaboration while building a data-science routin
 Read these first:
 - [CONTRIBUTING.md](CONTRIBUTING.md)
 - [Git Beginner Guide](docs/guides/git-beginner-guide.md)
-- [Maintainer Playbook](docs/guides/maintainer-playbook.md)
-- [Automatic Codex Reviews](docs/guides/automatic-codex-reviews.md)
+- [Project Design](design.md)
 
 ## Quick Start
 ```bash
@@ -41,5 +40,6 @@ src/                 # project code
 tests/               # unit tests
 data/manual/         # manual input files
 data/processed/      # generated csv outputs
-docs/guides/         # beginner + maintainer guides
+docs/guides/         # contributor onboarding guides
+design.md            # project design and routing approach
 ```
