@@ -89,6 +89,24 @@ def _is_polygon_geometry_mapping(value: Any) -> bool:
     return _has_valid_polygon_coordinates(geometry_type, coordinates)
 
 
+def _has_positive_finite_area(geometry: Any) -> bool:
+    area = getattr(geometry, "area", None)
+    if area is None:
+        return True
+    try:
+        area_value = float(area)
+    except (TypeError, ValueError):
+        return False
+    return math.isfinite(area_value) and area_value > 0
+
+
+def _is_valid_surface_geometry(geometry: Any) -> bool:
+    is_valid = getattr(geometry, "is_valid", None)
+    if is_valid is False:
+        return False
+    return _has_positive_finite_area(geometry)
+
+
 def _extract_from_geometry_object(value: Any) -> tuple[dict[str, Any] | None, bool]:
     if not isinstance(value, dict):
         return None, False
@@ -194,6 +212,12 @@ def _load_boundary_polygon(polygon_geojson_path: str | PathLike[str]) -> Any:
         raise ValueError("Boundary geometry is empty.")
     if not isinstance(polygon, (polygon_cls, multipolygon_cls)):
         raise ValueError("Boundary geometry must be Polygon or MultiPolygon.")
+    if not _is_valid_surface_geometry(polygon):
+        raise ValueError("Boundary geometry is invalid or has zero area.")
+    if isinstance(polygon, multipolygon_cls):
+        geoms = list(getattr(polygon, "geoms", ()))
+        if geoms and any(not _is_valid_surface_geometry(geom) for geom in geoms):
+            raise ValueError("Boundary geometry is invalid or has zero area.")
 
     return polygon
 
@@ -277,7 +301,8 @@ def _normalize_edge_distances(graph: nx.MultiDiGraph) -> None:
 
     We intentionally keep both fields:
     - `length`: original upstream value (commonly from OSMnx)
-    - `distance_m`: validated finite positive float used by routing logic
+    - `distance_m`: validated finite strictly-positive float used by routing
+      logic. Zero-length edges are rejected to prevent zero-cost hops.
     """
     for source, target, key, edge_data in graph.edges(keys=True, data=True):
         edge_label = f"{source}->{target}, key={key}"
@@ -304,11 +329,15 @@ def _normalise_edge_distances(graph: nx.MultiDiGraph) -> None:
     _normalize_edge_distances(graph)
 
 
-def build_walking_graph_from_polygon(polygon_geojson_path: str) -> nx.MultiDiGraph:
+def build_walking_graph_from_polygon(polygon_geojson_path: str | PathLike[str]) -> nx.MultiDiGraph:
     """Load a campus boundary GeoJSON and fetch the walking graph from OSMnx.
 
     Every edge receives a normalized ``distance_m`` value sourced from OSMnx
     edge ``length`` (meters).
+
+    If a FeatureCollection contains multiple polygon features, all polygon
+    members are aggregated into a single MultiPolygon boundary before graph
+    retrieval.
     """
     polygon = _load_boundary_polygon(polygon_geojson_path)
     ox = _import_osmnx()

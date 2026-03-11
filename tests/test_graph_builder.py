@@ -45,6 +45,16 @@ class _FakeMultiPolygon:
     geoms = ()
 
 
+class _FakeInvalidPolygon(_FakePolygon):
+    is_valid = False
+    area = 1.0
+
+
+class _FakeZeroAreaPolygon(_FakePolygon):
+    is_valid = True
+    area = 0.0
+
+
 def _patch_shapely(monkeypatch, *, shape_fn=None) -> None:
     if shape_fn is None:
         shape_fn = lambda _: _FakePolygon()
@@ -265,6 +275,21 @@ def test_build_walking_graph_loads_walk_network_and_sets_distance_m(tmp_path, mo
     assert fake_osmnx.received_polygon.geom_type == "Polygon"
     assert result.edges[1, 2, 0]["distance_m"] == pytest.approx(15.5)
     assert fake_osmnx.distance.called is False
+
+
+def test_build_walking_graph_accepts_path_object(tmp_path, monkeypatch):
+    boundary_path = tmp_path / "campus_boundary.geojson"
+    _write_boundary(boundary_path)
+
+    _patch_shapely(monkeypatch)
+    graph = nx.MultiDiGraph()
+    graph.add_edge(1, 2, key=0, length=10.0)
+    fake_osmnx = _FakeOsmnx(graph)
+    monkeypatch.setattr(graph_builder, "_import_osmnx", lambda: fake_osmnx)
+
+    result = graph_builder.build_walking_graph_from_polygon(boundary_path)
+
+    assert result.edges[1, 2, 0]["distance_m"] == pytest.approx(10.0)
 
 
 def test_build_walking_graph_adds_missing_length_before_distance_m(tmp_path, monkeypatch):
@@ -717,6 +742,56 @@ def test_load_boundary_polygon_rejects_empty_shapely_geometry(tmp_path, monkeypa
 
     _patch_shapely(monkeypatch, shape_fn=lambda _geometry: _EmptyPolygon())
     with pytest.raises(ValueError, match="Boundary geometry is empty"):
+        graph_builder._load_boundary_polygon(str(boundary_path))
+
+
+def test_load_boundary_polygon_rejects_invalid_shapely_geometry(tmp_path, monkeypatch):
+    boundary_path = tmp_path / "campus_boundary.geojson"
+    _write_boundary(boundary_path)
+
+    _patch_shapely(monkeypatch, shape_fn=lambda _geometry: _FakeInvalidPolygon())
+    with pytest.raises(ValueError, match="invalid or has zero area"):
+        graph_builder._load_boundary_polygon(str(boundary_path))
+
+
+def test_load_boundary_polygon_rejects_zero_area_shapely_geometry(tmp_path, monkeypatch):
+    boundary_path = tmp_path / "campus_boundary.geojson"
+    _write_boundary(boundary_path)
+
+    _patch_shapely(monkeypatch, shape_fn=lambda _geometry: _FakeZeroAreaPolygon())
+    with pytest.raises(ValueError, match="invalid or has zero area"):
+        graph_builder._load_boundary_polygon(str(boundary_path))
+
+
+def test_load_boundary_polygon_rejects_non_numeric_coordinates(tmp_path, monkeypatch):
+    boundary_path = tmp_path / "campus_boundary.geojson"
+    payload = {
+        "type": "Feature",
+        "geometry": {
+            "type": "Polygon",
+            "coordinates": [[["3.146", 6.669], [3.161, 6.669], [3.161, 6.678], [3.146, 6.678], ["3.146", 6.669]]],
+        },
+    }
+    boundary_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    _patch_shapely(monkeypatch)
+    with pytest.raises(ValueError, match="Boundary geometry is not a valid GeoJSON geometry"):
+        graph_builder._load_boundary_polygon(str(boundary_path))
+
+
+def test_load_boundary_polygon_rejects_boolean_coordinates(tmp_path, monkeypatch):
+    boundary_path = tmp_path / "campus_boundary.geojson"
+    payload = {
+        "type": "Feature",
+        "geometry": {
+            "type": "Polygon",
+            "coordinates": [[[True, 6.669], [3.161, 6.669], [3.161, 6.678], [3.146, 6.678], [True, 6.669]]],
+        },
+    }
+    boundary_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    _patch_shapely(monkeypatch)
+    with pytest.raises(ValueError, match="Boundary geometry is not a valid GeoJSON geometry"):
         graph_builder._load_boundary_polygon(str(boundary_path))
 
 
