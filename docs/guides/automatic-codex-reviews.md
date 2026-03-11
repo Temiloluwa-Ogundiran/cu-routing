@@ -15,7 +15,7 @@ This repository can run automated Codex reviews on every pull request.
    - Value: your OpenAI API key
 3. Optional: create repository variable:
    - Name: `OPENAI_REVIEW_MODEL`
-   - Value: model name for future overrides (workflow currently pins `gpt-5`)
+- Value: model name for future overrides (workflow currently pins `gpt-5-mini`)
 
 ## Workflow File
 - `.github/workflows/codex-pr-review.yml`
@@ -30,3 +30,9 @@ This repository can run automated Codex reviews on every pull request.
 2. Wait for `Codex PR Review` workflow comment.
 3. Use findings to request fixes.
 4. Re-check after contributor pushes updates.
+
+## Quick Verification Checklist
+- Open a new PR with a tiny docs-only change.
+- Confirm `Run Tests` check passes.
+- Confirm `Codex PR Review` check completes.
+- Confirm one bot comment exists with marker `<!-- codex-auto-review -->`.
