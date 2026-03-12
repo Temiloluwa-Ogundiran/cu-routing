@@ -20,8 +20,6 @@ def slugify_building_name(name: str, existing_slugs=None) -> str:
     if not isinstance(name, str):
         raise ValueError("building_name must be a non-empty string")
     
-    if existing_slugs is None:
-        existing_slugs = set()
     
     # Convert to lowercase, remove special characters
     slug = re.sub(r"[^a-z0-9\s-]", "", name.lower().strip())
