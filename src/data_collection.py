@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import re
 from typing import Iterable
-from collections import defaultdict
 
 import pandas as pd
 
@@ -56,10 +55,11 @@ def load_buildings_csv(path: str) -> pd.DataFrame:
     df = pd.read_csv(path)
     validate_schema(df)
     if df["building_name"].isna().any():
-        raise ValueError("building_name contains null values")
+        row = df["building_name"].isna().idxmax()
+        raise ValueError(f"building_name missing at row {row}")
     
     validate_coordinates(df["latitude"], df["longitude"])
-    
+
     existing_slugs = set()
 
     df["building_id"] = [
