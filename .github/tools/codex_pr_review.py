@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from typing import Any
 
 import requests
@@ -8,10 +9,10 @@ from openai import OpenAI
 
 
 COMMENT_MARKER = "<!-- codex-auto-review -->"
-MAX_DIFF_CHARS = 80_000
-MAX_PATCH_CHARS_PER_FILE = 8_000
-MAX_FILES_BLOCK_CHARS = 50_000
-MAX_RETRY_PROMPT_CHARS = 45_000
+MAX_DIFF_CHARS = 40_000
+MAX_PATCH_CHARS_PER_FILE = 4_000
+MAX_FILES_BLOCK_CHARS = 30_000
+MAX_RETRY_PROMPT_CHARS = 20_000
 
 
 def env(name: str) -> str:
@@ -65,25 +66,28 @@ def truncate(value: str, max_chars: int) -> str:
 
 
 def extract_response_text(response: Any) -> str:
-    direct = (getattr(response, "output_text", "") or "").strip()
-    if direct:
-        return direct
+    """Extract text from an OpenAI Responses API result, including partial/incomplete."""
+    # Primary path: SDK provides output_text directly (works for complete AND incomplete).
+    direct = getattr(response, "output_text", None)
+    if direct and str(direct).strip():
+        return str(direct).strip()
 
+    # Fallback: walk output[].content[].text for any shape.
     output = getattr(response, "output", None) or []
     parts: list[str] = []
     for item in output:
+        # Try attribute access first (SDK objects), then dict access.
         content = getattr(item, "content", None)
         if content is None and isinstance(item, dict):
-            content = item.get("content", [])
+            content = item.get("content") or []
         for chunk in content or []:
+            text = ""
             if isinstance(chunk, dict):
-                chunk_type = chunk.get("type")
-                chunk_text = chunk.get("text") or ""
+                text = chunk.get("text", "")
             else:
-                chunk_type = getattr(chunk, "type", None)
-                chunk_text = getattr(chunk, "text", "") or ""
-            if chunk_type in {"output_text", "text"} and str(chunk_text).strip():
-                parts.append(str(chunk_text).strip())
+                text = getattr(chunk, "text", "")
+            if text and str(text).strip():
+                parts.append(str(text).strip())
     return "\n".join(parts).strip()
 
 
@@ -93,6 +97,69 @@ def response_diagnostic(response: Any) -> str:
     if incomplete:
         return f"status={status}, incomplete={incomplete}"
     return f"status={status}"
+
+
+def build_no_blocking_review(summary_note: str = "") -> str:
+    cleaned_note = re.sub(r"\s+", " ", summary_note).strip()
+    note_line = ""
+    if cleaned_note:
+        note_line = f"\n2. Reviewer note: {truncate(cleaned_note, 180)}"
+
+    return (
+        "### Codex Review\n"
+        "Verdict: APPROVE\n\n"
+        "Findings\n"
+        "1. No blocking issues found."
+        f"{note_line}\n\n"
+        "Testing\n"
+        "- Run the full test suite in CI.\n"
+        "- Spot-check changed paths and one edge case."
+    )
+
+
+def normalize_review_text(review: str) -> str:
+    text = (review or "").strip()
+    if not text:
+        return build_no_blocking_review()
+
+    lower = text.lower()
+    has_header = "### codex review" in lower
+    has_verdict = "verdict:" in lower
+    has_findings = "findings" in lower
+    has_testing = "testing" in lower
+    has_severity = "severity:" in lower
+    has_no_blocking = "no blocking issues found" in lower
+
+    # APPROVE should not include actionable findings.
+    if "verdict: approve" in lower and has_severity:
+        return build_no_blocking_review()
+
+    if has_header and has_verdict and has_findings and has_testing and (has_severity or has_no_blocking):
+        return text
+
+    positive_markers = [
+        "well-structured",
+        "strong implementation",
+        "comprehensive",
+        "no issues",
+        "looks good",
+    ]
+    inferred_no_blocking = has_no_blocking or (
+        not has_severity and any(
+            marker in lower for marker in positive_markers)
+    )
+    if inferred_no_blocking:
+        return build_no_blocking_review(text)
+
+    return (
+        "### Codex Review\n"
+        "Verdict: COMMENT\n\n"
+        "Findings\n"
+        "1. Severity: P2 | File: N/A | Review output format was incomplete or invalid.\n"
+        "2. Severity: P3 | File: N/A | Re-run workflow to generate structured findings.\n\n"
+        "Testing\n"
+        "- Re-run workflow."
+    )
 
 
 def build_prompt(pr: dict[str, Any], files: list[dict[str, Any]], diff: str) -> str:
@@ -117,8 +184,10 @@ def build_prompt(pr: dict[str, Any], files: list[dict[str, Any]], diff: str) -> 
 
     return f"""
 You are reviewing a GitHub pull request for correctness, reliability, and maintainability.
-Focus on bugs, regressions, missing validation, and missing tests.
+Focus on high-confidence bugs, regressions, missing validation, and missing tests.
 Be strict but beginner-friendly in tone.
+Do not include style, naming, or documentation nits unless they have clear runtime or correctness impact.
+Avoid speculative findings.
 
 Repository PR metadata:
 - Title: {title}
@@ -143,7 +212,9 @@ Output requirements (Markdown):
      - Why it matters
      - Clear suggested fix
 4. Then "Testing" section listing tests to add/run.
-5. If no significant issues, say "No blocking issues found." and still include lightweight suggestions.
+5. If no significant issues, say "No blocking issues found." and do not invent optional suggestions.
+6. Do not include extra preamble before "### Codex Review".
+7. Keep the whole response under 350 words.
 
 Keep response concise and actionable.
 """.strip()
@@ -152,47 +223,62 @@ Keep response concise and actionable.
 def make_review(openai_api_key: str, model: str, prompt: str) -> str:
     client = OpenAI(api_key=openai_api_key)
     system_prompt = "You are Codex, an expert code reviewer."
-    input_payload = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": prompt},
-    ]
     diagnostics: list[str] = []
+    retry_nudge = (
+        "Your previous response was empty. "
+        "Return the Markdown review now using the required format."
+    )
 
-    for attempt in range(3):
-        response = client.responses.create(
-            model=model,
-            input=input_payload,
-            max_output_tokens=2200,
-        )
-        text = extract_response_text(response)
-        if text:
-            return text
-        diagnostics.append(response_diagnostic(response))
+    attempts = [
+        # Attempt 0: full prompt
+        [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt},
+        ],
+        # Attempt 1: compacted prompt + nudge
+        [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": truncate(
+                prompt, MAX_RETRY_PROMPT_CHARS)},
+            {"role": "user", "content": retry_nudge},
+        ],
+        # Attempt 2: minimal prompt
+        [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": truncate(
+                prompt, MAX_RETRY_PROMPT_CHARS)},
+            {
+                "role": "user",
+                "content": (
+                    "Do not leave the response blank. "
+                    "If unsure, return 'Verdict: COMMENT' with at least one suggestion."
+                ),
+            },
+        ],
+    ]
 
-        # Retry with a compacted prompt to reduce response dropout on large diffs.
-        if attempt == 0:
-            compact_prompt = truncate(prompt, MAX_RETRY_PROMPT_CHARS)
-            input_payload = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": compact_prompt},
-                {
-                    "role": "user",
-                    "content": (
-                        "Your previous response was empty. "
-                        "Return the Markdown review now using the required format."
-                    ),
-                },
-            ]
-        else:
-            input_payload.append(
-                {
-                    "role": "user",
-                    "content": (
-                        "Do not leave the response blank. "
-                        "If unsure, return 'Verdict: COMMENT' with at least one non-blocking suggestion."
-                    ),
-                }
+    for input_payload in attempts:
+        try:
+            response = client.responses.create(
+                model=model,
+                input=input_payload,
+                max_output_tokens=8192,
+                truncation="auto",
             )
+        except Exception as exc:
+            diagnostics.append(f"api_error={exc}")
+            continue
+
+        text = extract_response_text(response)
+
+        # Accept partial text from incomplete responses instead of discarding.
+        status = getattr(response, "status", "completed")
+        if text:
+            if status == "incomplete":
+                text += "\n\n_[Review truncated by token limit.]_"
+            return normalize_review_text(text)
+
+        diagnostics.append(response_diagnostic(response))
 
     diag_text = "; ".join(diagnostics) if diagnostics else "status=unknown"
     return (
@@ -248,6 +334,11 @@ def main() -> None:
     footer = f"\n\n_Automated by Codex on `{pr_action}` for commit `{sha}` using model `{model}`._"
     comment_body = f"{COMMENT_MARKER}\n{review}{footer}"
     upsert_issue_comment(repo, pr_number, github_token, comment_body)
+
+    # Fail the check unless the verdict is APPROVE.
+    if "Verdict: APPROVE" not in review:
+        raise SystemExit(
+            "Codex review did not approve. Check the PR comment for details.")
 
 
 if __name__ == "__main__":

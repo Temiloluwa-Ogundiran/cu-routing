@@ -7,6 +7,7 @@ on:
       - reopened
       - synchronize
       - ready_for_review
+  workflow_dispatch:
 
 concurrency:
   group: codex-review-pr-${{ github.event.pull_request.number }}
@@ -44,5 +45,5 @@ jobs:
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_ACTION: ${{ github.event.action }}
-          OPENAI_MODEL: gpt-5-mini
+          OPENAI_MODEL: ${{ vars.OPENAI_REVIEW_MODEL }}
         run: python .github/tools/codex_pr_review.py
