@@ -1,4 +1,5 @@
 """Tests for main.py CLI pipeline"""
+import sys
 import tempfile
 from pathlib import Path
 import pandas as pd
@@ -111,3 +112,109 @@ def test_main_runs_without_crashing():
         assert (output_dir / "buildings.csv").exists()
         assert (output_dir / "graph_edges.csv").exists()
         assert (output_dir / "routes.csv").exists()
+
+# NEW TEST 1: routes.csv has expected columns when 0 buildings
+def test_routes_csv_columns_with_zero_buildings():
+    """Test that routes.csv has correct columns even with no buildings"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create empty buildings file (only headers)
+        buildings_file = Path(tmpdir) / "buildings.csv"
+        pd.DataFrame(columns=['building_name', 'latitude', 'longitude']).to_csv(buildings_file, index=False)
+        boundary_file = Path(tmpdir) / "boundary.geojson"
+        boundary_file.touch()
+        output_dir = Path(tmpdir) / "output"
+        # Run main
+        sys.argv = ["main.py", "--input", str(buildings_file),
+                    "--boundary", str(boundary_file), "--output", str(output_dir)]
+        main.main()
+        # Check routes.csv exists and has correct columns
+        routes_file = output_dir / "routes.csv"
+        assert routes_file.exists()
+        routes_df = pd.read_csv(routes_file)
+        expected_columns = [
+            'origin_building_id', 'destination_building_id', 'algorithm',
+            'distance_m', 'estimated_time_min', 'path_node_count',
+            'path_nodes', 'path_buildings', 'computed_at'
+        ]
+        for col in expected_columns:
+            assert col in routes_df.columns, f"Missing column: {col}"
+
+# NEW TEST 2: routes.csv has expected columns when 1 building
+def test_routes_csv_columns_with_one_building():
+    """Test that routes.csv has correct columns with only one building"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create buildings file with 1 building
+        buildings_file = Path(tmpdir) / "buildings.csv"
+        pd.DataFrame({
+            'building_name': ['Library'],
+            'latitude': [6.6723],
+            'longitude': [3.1581]
+        }).to_csv(buildings_file, index=False)
+        boundary_file = Path(tmpdir) / "boundary.geojson"
+        boundary_file.touch()
+        output_dir = Path(tmpdir) / "output"
+        # Run main
+        sys.argv = ["main.py", "--input", str(buildings_file),
+                    "--boundary", str(boundary_file), "--output", str(output_dir)]
+        main.main()
+        # Check routes.csv exists and has correct columns
+        routes_file = output_dir / "routes.csv"
+        assert routes_file.exists()
+        routes_df = pd.read_csv(routes_file)
+        expected_columns = [
+            'origin_building_id', 'destination_building_id', 'algorithm',
+            'distance_m', 'estimated_time_min', 'path_node_count',
+            'path_nodes', 'path_buildings', 'computed_at'
+        ]
+        for col in expected_columns:
+            assert col in routes_df.columns, f"Missing column: {col}"
+        # Should have 0 routes (since only 1 building)
+        assert len(routes_df) == 0
+
+# NEW TEST 3: graph_edges.csv has expected columns when graph has zero edges
+def test_graph_edges_csv_columns_with_empty_graph():
+    """Test that graph_edges.csv has correct columns even when graph is empty"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create minimal input
+        buildings_file = Path(tmpdir) / "buildings.csv"
+        pd.DataFrame({
+            'building_name': ['Library'],
+            'latitude': [6.6723],
+            'longitude': [3.1581]
+        }).to_csv(buildings_file, index=False)
+        boundary_file = Path(tmpdir) / "boundary.geojson"
+        boundary_file.touch()
+        output_dir = Path(tmpdir) / "output"
+        # Run main
+        sys.argv = ["main.py", "--input", str(buildings_file),
+                    "--boundary", str(boundary_file), "--output", str(output_dir)]
+        main.main()
+        # Check graph_edges.csv exists and has correct columns
+        edges_file = output_dir / "graph_edges.csv"
+        assert edges_file.exists()
+        edges_df = pd.read_csv(edges_file)
+        expected_columns = ["from_node", "to_node", "distance_m"]
+        for col in expected_columns:
+            assert col in edges_df.columns, f"Missing column: {col}"
+
+# NEW TEST 4: validate_files_exist returns False for directories
+def test_validate_files_exist_with_directories():
+    """Test that validate_files_exist returns False when given directories instead of files"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create directories (not files)
+        buildings_dir = Path(tmpdir) / "buildings_dir"
+        boundary_dir = Path(tmpdir) / "boundary_dir"
+        buildings_dir.mkdir()
+        boundary_dir.mkdir()
+        # Validation should fail (these are directories, not files)
+        assert main.validate_files_exist(buildings_dir, boundary_dir) == False
+        # Create real files
+        buildings_file = Path(tmpdir) / "buildings.csv"
+        boundary_file = Path(tmpdir) / "boundary.geojson"
+        buildings_file.touch()
+        boundary_file.touch()
+        # Validation should pass
+        assert main.validate_files_exist(buildings_file, boundary_file) == True
+        # Mix one file, one directory should fail
+        assert main.validate_files_exist(buildings_file, boundary_dir) == False
+        assert main.validate_files_exist(buildings_dir, boundary_file) == False
