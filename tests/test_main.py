@@ -3,6 +3,8 @@ import sys
 import tempfile
 from pathlib import Path
 import pandas as pd
+import pytest
+import unittest.mock
 import main
 
 def test_validate_files_exist_with_real_files():
@@ -57,12 +59,28 @@ def test_process_buildings_adds_ids_and_saves():
 def test_build_graph_creates_edges_csv():
     """Test graph building creates edges CSV (even if empty)"""
     with tempfile.TemporaryDirectory() as tmpdir:
-        # Create dummy boundary file
+        # Create a MINIMAL valid GeoJSON polygon
         boundary_file = Path(tmpdir) / "boundary.geojson"
-        boundary_file.touch()
+
+        # This is a tiny valid GeoJSON (a square around 0,0)
+        valid_geojson = {
+            "type": "Feature",
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [[
+                    [0, 0], [1, 0], [1, 1], [0, 1], [0, 0]
+                ]]
+            }
+        }
+
+        import json
+        with open(boundary_file, 'w') as f:
+            json.dump(valid_geojson, f)
+
         # Build graph
         output_dir = Path(tmpdir) / "output"
         graph = main.build_graph(boundary_file, output_dir)
+
         # Check edges file was created
         assert (output_dir / "graph_edges.csv").exists()
 
@@ -218,3 +236,93 @@ def test_validate_files_exist_with_directories():
         # Mix one file, one directory should fail
         assert main.validate_files_exist(buildings_file, boundary_dir) == False
         assert main.validate_files_exist(buildings_dir, boundary_file) == False
+
+
+def test_build_graph_handles_exception():
+    """Test build_graph gracefully handles graph builder failures"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        boundary_file = Path(tmpdir) / "boundary.geojson"
+        boundary_file.touch()
+        output_dir = Path(tmpdir) / "output"
+        # Mock the graph builder to raise an exception
+        with unittest.mock.patch('src.graph_builder.build_walking_graph_from_polygon') as mock_builder:
+            mock_builder.side_effect = Exception("OSM connection failed")
+            # This should NOT crash
+            graph = main.build_graph(boundary_file, output_dir)
+            # Should return None
+            assert graph is None
+            # Should still create empty CSV with headers
+            edges_file = output_dir / "graph_edges.csv"
+            assert edges_file.exists()
+            edges_df = pd.read_csv(edges_file)
+            assert list(edges_df.columns) == ["from_node", "to_node", "distance_m"]
+            assert len(edges_df) == 0
+
+
+def test_process_buildings_missing_columns():
+    """Test process_buildings raises error when required columns missing"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create CSV missing required columns
+        bad_file = Path(tmpdir) / "bad.csv"
+        pd.DataFrame({
+            'wrong_name': ['Library'],
+            'lat': [6.6723],
+            'lon': [3.1581]
+        }).to_csv(bad_file, index=False)
+        output_dir = Path(tmpdir) / "output"
+        # Should raise error about missing columns
+        with pytest.raises(ValueError, match="Missing required columns"):
+            main.process_buildings(bad_file, output_dir)
+
+
+def test_calculate_routes_not_implemented():
+    """Test calculate_routes handles NotImplementedError gracefully"""
+    buildings_df = pd.DataFrame({
+        'building_id': ['lib', 'cafe'],
+        'building_name': ['Library', 'Cafe'],
+        'latitude': [6.6723, 6.6734],
+        'longitude': [3.1581, 3.1592]
+    })
+    with tempfile.TemporaryDirectory() as tmpdir:
+        output_dir = Path(tmpdir)
+        # Mock the router to raise NotImplementedError
+        with unittest.mock.patch('src.router.map_building_to_nearest_node') as mock_map:
+            mock_map.side_effect = NotImplementedError("Not implemented")
+            result_df = main.calculate_routes(None, buildings_df, output_dir)
+            # Should return empty DataFrame with correct schema
+            expected_columns = [
+                'origin_building_id', 'destination_building_id', 'algorithm',
+                'distance_m', 'estimated_time_min', 'path_node_count',
+                'path_nodes', 'path_buildings', 'computed_at'
+            ]
+            for col in expected_columns:
+                assert col in result_df.columns
+            assert len(result_df) == 0
+            # Should still create CSV
+            routes_file = output_dir / "routes.csv"
+            assert routes_file.exists()
+
+
+def test_main_returns_1_on_validation_failure():
+    """Test main returns 1 (error) when file validation fails"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create only one file (other missing)
+        buildings_file = Path(tmpdir) / "buildings.csv"
+        buildings_file.touch()
+        # boundary_file not created
+        output_dir = Path(tmpdir) / "output"
+        # Mock args to point to non-existent boundary file
+        import sys
+        sys.argv = [
+            "main.py",
+            "--input", str(buildings_file),
+            "--boundary", str(Path(tmpdir) / "missing.geojson"),
+            "--output", str(output_dir)
+        ]
+        # Main should return 1 (error)
+        result = main.main()
+        assert result == 1
+        # No output files should be created
+        assert not (output_dir / "buildings.csv").exists()
+        assert not (output_dir / "graph_edges.csv").exists()
+        assert not (output_dir / "routes.csv").exists()

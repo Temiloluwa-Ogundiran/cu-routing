@@ -55,7 +55,49 @@ def setup_output_dir(output_dir):
 
 def process_buildings(buildings_path, output_dir):
     """Loads buildings and returns df of processed buildings"""
-    buildings_df = data_collection.load_buildings_csv(str(buildings_path))
+    # Ensure output directory exists
+    output_dir.mkdir(parents=True, exist_ok=True)
+    # Load the CSV
+    try:
+        buildings_df = data_collection.load_buildings_csv(str(buildings_path))
+    except Exception as e:
+        print(f"Error loading buildings file: {e}")
+        print("Please check that your CSV has the required columns: building_name, latitude, longitude")
+        raise  # Re-raise to stop the pipeline
+    # VALIDATION STEP 1: Check required columns exist
+    required_columns = ["building_name", "latitude", "longitude"]
+    missing_columns = [col for col in required_columns if col not in buildings_df.columns]
+    if missing_columns:
+        print(f"Error: Buildings CSV is missing required columns: {missing_columns}")
+        print(f"Your CSV has columns: {list(buildings_df.columns)}")
+        print("Please ensure your CSV includes: building_name, latitude, longitude")
+        raise ValueError(f"Missing required columns: {missing_columns}")
+    if len(buildings_df) > 0:
+        # VALIDATION STEP 2: Check latitude/longitude are numeric
+        for col in ["latitude", "longitude"]:
+            if not pd.api.types.is_numeric_dtype(buildings_df[col]):
+                print(f"Error: Column '{col}' must contain numbers")
+                print(f"Found values: {buildings_df[col].head()}")
+                raise ValueError(f"Column '{col}' is not numeric")
+        # VALIDATION STEP 3: Check for missing values
+        for col in ["latitude", "longitude"]:
+            if buildings_df[col].isna().any():
+                print(f"Warning: Some buildings have missing {col} values")
+                # Either drop them or fill with defaults - let's drop for now
+                buildings_df = buildings_df.dropna(subset=[col])
+                print(f"Dropped rows with missing {col}. {len(buildings_df)} buildings remaining")
+    # VALIDATION STEP 4: Ensure building_id exists
+    if "building_id" not in buildings_df.columns:
+        print("Note: 'building_id' not found in CSV, generating from building_name")
+        buildings_df["building_id"] = buildings_df["building_name"].apply(data_collection.slugify_building_name)
+    # VALIDATION STEP 5: Check for duplicate building_ids
+    if len(buildings_df) > 0 and buildings_df["building_id"].duplicated().any():
+        duplicates = buildings_df[buildings_df["building_id"].duplicated(keep=False)]
+        print(f"Warning: Found duplicate building_ids:")
+        for _, row in duplicates.iterrows():
+            print(f"  - {row['building_name']} → {row['building_id']}")
+        print("Routes may be ambiguous. Consider making building names more unique.")
+    # Save the validated data
     buildings_output = output_dir / "buildings.csv"
     export_csv.export_dataframe(buildings_df, str(buildings_output))
     print(f"Saved {len(buildings_df)} buildings to {buildings_output}")
@@ -64,7 +106,13 @@ def process_buildings(buildings_path, output_dir):
 def build_graph(boundary_path, output_dir):
     """Build walking path graph and save edges to csv"""
     output_dir.mkdir(parents=True, exist_ok=True)
-    graph = graph_builder.build_walking_graph_from_polygon(str(boundary_path))
+    try:
+        graph = graph_builder.build_walking_graph_from_polygon(str(boundary_path))
+        print("Graph built successfully")
+    except Exception as e:
+        print(f"Error: {e}")
+        print("Proceeding with empty graph_edges.csv")
+        graph = None
     edges_df = pd.DataFrame(columns=["from_node", "to_node", "distance_m"])
     if graph is not None and graph.number_of_nodes() > 0:
         print(f"Graph built with {graph.number_of_nodes()} nodes")
