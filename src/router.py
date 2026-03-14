@@ -1,6 +1,7 @@
 """Routing helpers for shortest-path queries."""
 
 from __future__ import annotations
+import math
 
 import networkx as nx
 
@@ -10,7 +11,22 @@ def map_building_to_nearest_node(_graph: nx.Graph, _latitude: float, _longitude:
 
     TODO(issue): Implement with OSMnx nearest nodes.
     """
-    raise NotImplementedError("Nearest-node mapping is not implemented yet.")
+    if len(_graph) == 0:
+        raise ValueError(
+            "Cannot map a coordinate to a node: the graph has no nodes. "
+            "Please ensure the graph is properly loaded with building nodes."
+        )
+    nearest_node: int | None = None
+    min_distance = math.inf
+    for node_id, data in _graph.nodes(data=True):
+        node_lat: float = data["y"]     # raises KeyError if missing
+        mode_long: float = data["x"]    # raises KeyError if missing
+
+        distance = math.hypot(_latitude - node_lat, _longitude - mode_long)
+        if distance < min_distance:
+            min_distance = distance
+            nearest_node = node_id
+    return int(nearest_node)    
 
 
 def find_shortest_path(
