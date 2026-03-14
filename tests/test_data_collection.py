@@ -188,16 +188,18 @@ def test_fetch_buildings_from_osm_normalizes_named_features(monkeypatch):
 
     result = fetch_buildings_from_osm("boundary.geojson")
 
-    assert len(result) == 2
-    assert set(result.columns) >= {"building_name", "latitude", "longitude", "building_id", "source"}
+    assert len(result) == 3
+    assert set(result.columns) >= {"building_name", "latitude", "longitude", "building_id", "source", "source_ref"}
     assert set(result["source"]) == {"osm"}
     assert fake_ox.calls[0][1] == {"building": True}
+    assert (result["building_name"].str.contains("OSM Building")).any()
 
 
-def test_fetch_buildings_from_osm_raises_when_no_named_features(monkeypatch):
+def test_fetch_buildings_from_osm_handles_unnamed_features_with_fallback_name(monkeypatch):
     features_df = pd.DataFrame({"name": [None], "geometry": [_FakePoint(3.15, 6.67)]})
     monkeypatch.setattr(data_collection, "_import_osmnx", lambda: _FakeOsmnx(features_df))
     monkeypatch.setattr("src.graph_builder._load_boundary_polygon", lambda _path: "fake-boundary")
 
-    with pytest.raises(ValueError, match="No named building features"):
-        fetch_buildings_from_osm("boundary.geojson")
+    result = fetch_buildings_from_osm("boundary.geojson")
+    assert len(result) == 1
+    assert result.iloc[0]["building_name"].startswith("OSM Building")

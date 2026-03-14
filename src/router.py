@@ -117,38 +117,79 @@ def compute_all_pairs_routes(
 
     computed_at = datetime.now(timezone.utc).isoformat()
     records: list[dict[str, Any]] = []
+    normalised_algorithm = algorithm.lower().strip()
 
-    for origin in building_nodes_df.itertuples(index=False):
+    if normalised_algorithm == "dijkstra":
+        node_to_destinations: dict[int, list[Any]] = {}
+        node_to_origins: dict[int, list[Any]] = {}
         for destination in building_nodes_df.itertuples(index=False):
-            if origin.building_id == destination.building_id:
-                continue
+            node_to_destinations.setdefault(int(destination.node_id), []).append(destination)
+        for origin in building_nodes_df.itertuples(index=False):
+            node_to_origins.setdefault(int(origin.node_id), []).append(origin)
 
-            try:
-                path, distance_m = find_shortest_path(
-                    graph,
-                    int(origin.node_id),
-                    int(destination.node_id),
-                    weight=weight,
-                    algorithm=algorithm,
+        for origin_node, origins in node_to_origins.items():
+            distances, paths = nx.single_source_dijkstra(graph, source=origin_node, weight=weight)
+            for destination_node, destinations in node_to_destinations.items():
+                if destination_node == origin_node:
+                    path = [origin_node]
+                    distance_m = 0.0
+                else:
+                    if destination_node not in distances:
+                        continue
+                    path = paths[destination_node]
+                    distance_m = float(distances[destination_node])
+
+                estimated_time_min = distance_m / walking_speed_m_per_min
+
+                for origin in origins:
+                    for destination in destinations:
+                        if origin.building_id == destination.building_id:
+                            continue
+                        records.append(
+                            {
+                                "origin_building_id": origin.building_id,
+                                "destination_building_id": destination.building_id,
+                                "algorithm": normalised_algorithm,
+                                "distance_m": distance_m,
+                                "estimated_time_min": float(estimated_time_min),
+                                "path_node_count": len(path),
+                                "path_nodes": "|".join(str(node_id) for node_id in path),
+                                "path_buildings": f"{origin.building_name}|{destination.building_name}",
+                                "computed_at": computed_at,
+                            }
+                        )
+    else:
+        for origin in building_nodes_df.itertuples(index=False):
+            for destination in building_nodes_df.itertuples(index=False):
+                if origin.building_id == destination.building_id:
+                    continue
+
+                try:
+                    path, distance_m = find_shortest_path(
+                        graph,
+                        int(origin.node_id),
+                        int(destination.node_id),
+                        weight=weight,
+                        algorithm=algorithm,
+                    )
+                except ValueError:
+                    # Skip unreachable pairs and keep route table focused on valid routes.
+                    continue
+
+                estimated_time_min = distance_m / walking_speed_m_per_min
+                records.append(
+                    {
+                        "origin_building_id": origin.building_id,
+                        "destination_building_id": destination.building_id,
+                        "algorithm": normalised_algorithm,
+                        "distance_m": float(distance_m),
+                        "estimated_time_min": float(estimated_time_min),
+                        "path_node_count": len(path),
+                        "path_nodes": "|".join(str(node_id) for node_id in path),
+                        "path_buildings": f"{origin.building_name}|{destination.building_name}",
+                        "computed_at": computed_at,
+                    }
                 )
-            except ValueError:
-                # Skip unreachable pairs and keep route table focused on valid routes.
-                continue
-
-            estimated_time_min = distance_m / walking_speed_m_per_min
-            records.append(
-                {
-                    "origin_building_id": origin.building_id,
-                    "destination_building_id": destination.building_id,
-                    "algorithm": algorithm.lower().strip(),
-                    "distance_m": float(distance_m),
-                    "estimated_time_min": float(estimated_time_min),
-                    "path_node_count": len(path),
-                    "path_nodes": "|".join(str(node_id) for node_id in path),
-                    "path_buildings": f"{origin.building_name}|{destination.building_name}",
-                    "computed_at": computed_at,
-                }
-            )
 
     routes_df = pd.DataFrame(records)
     if routes_df.empty:

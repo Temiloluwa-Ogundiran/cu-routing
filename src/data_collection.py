@@ -87,15 +87,20 @@ def _geometry_to_point(geometry: Any) -> Any:
 
 
 def _normalise_osm_buildings(features_df: pd.DataFrame) -> pd.DataFrame:
-    if "name" not in features_df.columns or "geometry" not in features_df.columns:
-        raise ValueError("OSM building features are missing required columns: name, geometry.")
+    if "geometry" not in features_df.columns:
+        raise ValueError("OSM building features are missing required column: geometry.")
+
+    working_df = features_df.reset_index()
+    if "element" not in working_df.columns:
+        working_df["element"] = "feature"
+    if "id" not in working_df.columns:
+        working_df["id"] = working_df.index.astype(str)
 
     existing_slugs: set[str] = set()
     records: list[dict[str, Any]] = []
-    for row in features_df.itertuples():
-        name = getattr(row, "name", None)
-        if not isinstance(name, str) or not name.strip():
-            continue
+    for row in working_df.itertuples(index=False):
+        element = str(getattr(row, "element", "unknown"))
+        osm_id = str(getattr(row, "id", "unknown"))
 
         point = _geometry_to_point(getattr(row, "geometry", None))
         if point is None:
@@ -107,7 +112,17 @@ def _normalise_osm_buildings(features_df: pd.DataFrame) -> pd.DataFrame:
         except (TypeError, ValueError, AttributeError):
             continue
 
-        building_name = name.strip()
+        raw_name = getattr(row, "name", None)
+        if isinstance(raw_name, str) and raw_name.strip():
+            building_name = raw_name.strip()
+        else:
+            building_type = getattr(row, "building", None)
+            if isinstance(building_type, str) and building_type.strip() and building_type.strip().lower() != "yes":
+                label = building_type.strip().replace("_", " ")
+                building_name = f"OSM {label.title()} {element} {osm_id}"
+            else:
+                building_name = f"OSM Building {element} {osm_id}"
+
         records.append(
             {
                 "building_name": building_name,
@@ -115,12 +130,13 @@ def _normalise_osm_buildings(features_df: pd.DataFrame) -> pd.DataFrame:
                 "longitude": longitude,
                 "building_id": slugify_building_name(building_name, existing_slugs),
                 "source": "osm",
+                "source_ref": f"{element}/{osm_id}",
             }
         )
 
     buildings_df = pd.DataFrame(records)
     if buildings_df.empty:
-        return pd.DataFrame(columns=["building_name", "latitude", "longitude", "building_id", "source"])
+        return pd.DataFrame(columns=["building_name", "latitude", "longitude", "building_id", "source", "source_ref"])
 
     validate_coordinates(buildings_df["latitude"], buildings_df["longitude"])
     return buildings_df
@@ -142,7 +158,7 @@ def fetch_buildings_from_osm(polygon_geojson_path: str | PathLike) -> pd.DataFra
 
     buildings_df = _normalise_osm_buildings(features)
     if buildings_df.empty:
-        raise ValueError("No named building features with valid geometry were found in OpenStreetMap response.")
+        raise ValueError("No building features with valid geometry were found in OpenStreetMap response.")
     return buildings_df
 
 

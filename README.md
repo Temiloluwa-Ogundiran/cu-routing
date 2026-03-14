@@ -89,7 +89,7 @@ Check `data/manual/campus_boundary.geojson`:
 If using `--buildings-source osm`:
 - check internet connection
 - widen boundary in `data/manual/campus_boundary.geojson`
-- ensure OSM has named building features in that boundary
+- ensure OSM has building features in that boundary (unnamed buildings are included with generated fallback names)
 
 If using `--buildings-source csv`, check `data/manual/buildings_seed.csv`:
 - file must have headers: `building_name,latitude,longitude`
