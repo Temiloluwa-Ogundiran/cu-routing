@@ -3,7 +3,7 @@
 Team project for learning Git collaboration while building a data-science routing pipeline.
 
 ## What We Are Building
-- Collect building coordinates for Covenant University (OpenStreetMap source).
+- Collect live building coordinates for Covenant University from OpenStreetMap.
 - Build a walking network graph.
 - Compute shortest paths for all building pairs.
 - Export clean CSV outputs for analysis.
@@ -41,8 +41,11 @@ pytest -q
 python main.py
 ```
 
-This uses default inputs:
-- `data/manual/buildings_seed.csv`
+By default this does both from OSM using the boundary file:
+- fetches live building features from OpenStreetMap
+- fetches live walking network from OpenStreetMap
+
+Default boundary input:
 - `data/manual/campus_boundary.geojson`
 
 And writes:
@@ -54,11 +57,19 @@ And writes:
 ### Custom Run Example
 ```bash
 python main.py \
-  --buildings-csv data/manual/buildings_seed.csv \
+  --buildings-source osm \
   --boundary-geojson data/manual/campus_boundary.geojson \
   --output-dir data/processed \
   --algorithm dijkstra \
   --walking-speed-m-per-min 80
+```
+
+### Optional: Use Local CSV Buildings Instead Of Live OSM
+```bash
+python main.py \
+  --buildings-source csv \
+  --buildings-csv data/manual/buildings_seed.csv \
+  --boundary-geojson data/manual/campus_boundary.geojson
 ```
 
 ## Troubleshooting
@@ -75,7 +86,12 @@ Check `data/manual/campus_boundary.geojson`:
 - coordinates must be numeric (`lon, lat`)
 
 ### `No buildings were loaded`
-Check `data/manual/buildings_seed.csv`:
+If using `--buildings-source osm`:
+- check internet connection
+- widen boundary in `data/manual/campus_boundary.geojson`
+- ensure OSM has named building features in that boundary
+
+If using `--buildings-source csv`, check `data/manual/buildings_seed.csv`:
 - file must have headers: `building_name,latitude,longitude`
 - at least one building row must exist
 

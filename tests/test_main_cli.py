@@ -61,6 +61,7 @@ def test_run_pipeline_writes_outputs(tmp_path, monkeypatch):
         output_dir=output_dir,
         algorithm="dijkstra",
         walking_speed_m_per_min=80.0,
+        buildings_source="csv",
     )
 
     assert set(result.keys()) == {"buildings_csv", "graph_edges_csv", "routes_csv", "validation_summary"}
@@ -90,6 +91,8 @@ def test_main_cli_runs_successfully(tmp_path, monkeypatch):
             str(boundary_geojson),
             "--output-dir",
             str(output_dir),
+            "--buildings-source",
+            "csv",
             "--algorithm",
             "dijkstra",
         ]
@@ -99,6 +102,37 @@ def test_main_cli_runs_successfully(tmp_path, monkeypatch):
     assert (output_dir / "buildings.csv").exists()
     assert (output_dir / "graph_edges.csv").exists()
     assert (output_dir / "routes.csv").exists()
+
+
+def test_run_pipeline_uses_live_osm_source_when_selected(tmp_path, monkeypatch):
+    boundary_geojson = tmp_path / "boundary.geojson"
+    output_dir = tmp_path / "processed"
+    _write_boundary_geojson(boundary_geojson)
+
+    monkeypatch.setattr(main, "build_walking_graph_from_polygon", lambda _path: _graph())
+    monkeypatch.setattr(
+        main,
+        "fetch_buildings_from_osm",
+        lambda _path: pd.DataFrame(
+            [
+                {"building_name": "Alpha Hall", "latitude": 6.6700, "longitude": 3.1500, "building_id": "alpha-hall", "source": "osm"},
+                {"building_name": "Beta Hall", "latitude": 6.6710, "longitude": 3.1510, "building_id": "beta-hall", "source": "osm"},
+            ]
+        ),
+    )
+
+    result = main.run_pipeline(
+        buildings_csv_path=None,
+        boundary_geojson_path=boundary_geojson,
+        output_dir=output_dir,
+        algorithm="dijkstra",
+        walking_speed_m_per_min=80.0,
+        buildings_source="osm",
+    )
+
+    assert result["buildings_csv"].exists()
+    written = pd.read_csv(result["buildings_csv"])
+    assert list(written["source"].unique()) == ["osm"]
 
 
 def test_main_cli_help_exits_cleanly():

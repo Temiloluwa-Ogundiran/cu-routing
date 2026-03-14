@@ -1,7 +1,8 @@
 import pandas as pd
 import pytest
 
-from src.data_collection import slugify_building_name, validate_coordinates, validate_schema, load_buildings_csv
+from src import data_collection
+from src.data_collection import fetch_buildings_from_osm, load_buildings_csv, slugify_building_name, validate_coordinates, validate_schema
 
 
 def test_slugify_building_name():
@@ -142,3 +143,61 @@ Engineering @ Auditorium!,12,22
         "engineering-auditorium-2",
         "engineering-auditorium-3",
     ]
+
+
+class _FakePoint:
+    geom_type = "Point"
+
+    def __init__(self, x: float, y: float):
+        self.x = x
+        self.y = y
+        self.is_empty = False
+
+
+class _FakePolygonGeom:
+    geom_type = "Polygon"
+    is_empty = False
+
+    def __init__(self, x: float, y: float):
+        self._point = _FakePoint(x, y)
+
+    def representative_point(self):
+        return self._point
+
+
+class _FakeOsmnx:
+    def __init__(self, features_df: pd.DataFrame) -> None:
+        self._features_df = features_df
+        self.calls = []
+
+    def features_from_polygon(self, polygon, tags):
+        self.calls.append((polygon, tags))
+        return self._features_df
+
+
+def test_fetch_buildings_from_osm_normalizes_named_features(monkeypatch):
+    features_df = pd.DataFrame(
+        {
+            "name": ["Alpha Hall", None, "Beta Hall"],
+            "geometry": [_FakePoint(3.15, 6.67), _FakePoint(3.16, 6.68), _FakePolygonGeom(3.17, 6.69)],
+        }
+    )
+    fake_ox = _FakeOsmnx(features_df)
+    monkeypatch.setattr(data_collection, "_import_osmnx", lambda: fake_ox)
+    monkeypatch.setattr("src.graph_builder._load_boundary_polygon", lambda _path: "fake-boundary")
+
+    result = fetch_buildings_from_osm("boundary.geojson")
+
+    assert len(result) == 2
+    assert set(result.columns) >= {"building_name", "latitude", "longitude", "building_id", "source"}
+    assert set(result["source"]) == {"osm"}
+    assert fake_ox.calls[0][1] == {"building": True}
+
+
+def test_fetch_buildings_from_osm_raises_when_no_named_features(monkeypatch):
+    features_df = pd.DataFrame({"name": [None], "geometry": [_FakePoint(3.15, 6.67)]})
+    monkeypatch.setattr(data_collection, "_import_osmnx", lambda: _FakeOsmnx(features_df))
+    monkeypatch.setattr("src.graph_builder._load_boundary_polygon", lambda _path: "fake-boundary")
+
+    with pytest.raises(ValueError, match="No named building features"):
+        fetch_buildings_from_osm("boundary.geojson")

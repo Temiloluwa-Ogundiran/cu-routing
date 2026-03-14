@@ -11,7 +11,7 @@ from src.config import (
     DEFAULT_WALKING_SPEED_M_PER_MIN,
     PROCESSED_DATA_DIR,
 )
-from src.data_collection import load_buildings_csv
+from src.data_collection import fetch_buildings_from_osm, load_buildings_csv
 from src.export_csv import (
     export_buildings_csv,
     export_graph_edges_csv,
@@ -24,13 +24,23 @@ from src.router import compute_all_pairs_routes, map_buildings_to_nodes
 
 def run_pipeline(
     *,
-    buildings_csv_path: str | Path,
+    buildings_csv_path: str | Path | None,
     boundary_geojson_path: str | Path,
     output_dir: str | Path,
     algorithm: str,
     walking_speed_m_per_min: float,
+    buildings_source: str = "osm",
 ) -> dict[str, Path]:
-    buildings_df = load_buildings_csv(str(buildings_csv_path))
+    normalised_source = buildings_source.strip().lower()
+    if normalised_source == "osm":
+        buildings_df = fetch_buildings_from_osm(str(boundary_geojson_path))
+    elif normalised_source == "csv":
+        if buildings_csv_path is None:
+            raise ValueError("buildings_csv_path is required when buildings_source='csv'.")
+        buildings_df = load_buildings_csv(str(buildings_csv_path))
+    else:
+        raise ValueError("Unsupported buildings_source. Use 'osm' or 'csv'.")
+
     if buildings_df.empty:
         raise ValueError("No buildings were loaded. Provide at least one building row.")
 
@@ -66,7 +76,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--buildings-csv",
         default=str(DEFAULT_BUILDINGS_CSV_PATH),
-        help="Input CSV containing building_name, latitude, longitude.",
+        help="Input CSV containing building_name, latitude, longitude (used when --buildings-source=csv).",
+    )
+    parser.add_argument(
+        "--buildings-source",
+        default="osm",
+        choices=("osm", "csv"),
+        help="Source for building coordinates. Default is live OpenStreetMap fetch from boundary.",
     )
     parser.add_argument(
         "--boundary-geojson",
@@ -103,6 +119,7 @@ def main(argv: list[str] | None = None) -> int:
         output_dir=args.output_dir,
         algorithm=args.algorithm,
         walking_speed_m_per_min=args.walking_speed_m_per_min,
+        buildings_source=args.buildings_source,
     )
 
     for label, output_path in outputs.items():
