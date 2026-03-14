@@ -17,6 +17,7 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 myenv/
+cache/
 
 # Environment files
 .env
@@ -30,4 +31,5 @@ Thumbs.db
 
 # Generated outputs
 data/processed/*.csv
+data/processed/*.md
 !data/processed/.gitkeep

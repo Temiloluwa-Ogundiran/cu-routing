@@ -1,0 +1,33 @@
+{
+  "type": "Feature",
+  "properties": {
+    "name": "Covenant University Approximate Campus Boundary"
+  },
+  "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+      [
+        [
+          3.1458,
+          6.6692
+        ],
+        [
+          3.1608,
+          6.6692
+        ],
+        [
+          3.1608,
+          6.6784
+        ],
+        [
+          3.1458,
+          6.6784
+        ],
+        [
+          3.1458,
+          6.6692
+        ]
+      ]
+    ]
+  }
+}

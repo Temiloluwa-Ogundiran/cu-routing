@@ -5,9 +5,10 @@ from __future__ import annotations
 import math
 
 import networkx as nx
+import pandas as pd
 import pytest
 
-from src.router import map_building_to_nearest_node
+from src.router import compute_all_pairs_routes, find_shortest_path, map_building_to_nearest_node
 
 def make_graph(nodes: list[tuple[int, float, float]]) -> nx.Graph:
     """Build a minimal OSMnx-style graph from (node_id, lat, lon) triples."""
@@ -111,3 +112,99 @@ class TestMissingAttributes:
         g.add_node(1, y=0.0)  # no 'x'
         with pytest.raises(KeyError):
             map_building_to_nearest_node(g, 0.0, 0.0)
+
+
+# Tests - shortest path
+class TestShortestPath:
+    def test_returns_path_and_distance(self):
+        g = nx.Graph()
+        g.add_edge(1, 2, distance_m=10.0)
+        g.add_edge(2, 3, distance_m=5.0)
+
+        path, distance = find_shortest_path(g, 1, 3)
+
+        assert path == [1, 2, 3]
+        assert distance == pytest.approx(15.0)
+
+    def test_raises_when_origin_missing(self):
+        g = nx.Graph()
+        g.add_node(2)
+
+        with pytest.raises(ValueError, match="Origin node .* not found"):
+            find_shortest_path(g, 1, 2)
+
+    def test_raises_when_destination_missing(self):
+        g = nx.Graph()
+        g.add_node(1)
+
+        with pytest.raises(ValueError, match="Destination node .* not found"):
+            find_shortest_path(g, 1, 2)
+
+    def test_raises_when_no_route_exists(self):
+        g = nx.Graph()
+        g.add_edge(1, 2, distance_m=1.0)
+        g.add_edge(3, 4, distance_m=1.0)
+
+        with pytest.raises(ValueError, match="No route found"):
+            find_shortest_path(g, 1, 4)
+
+    def test_raises_for_unknown_algorithm(self):
+        g = nx.Graph()
+        g.add_edge(1, 2, distance_m=1.0)
+
+        with pytest.raises(ValueError, match="Unsupported routing algorithm"):
+            find_shortest_path(g, 1, 2, algorithm="bellman-ford")
+
+
+# Tests - all-pairs computation
+class TestAllPairsRouting:
+    def _graph(self) -> nx.Graph:
+        g = nx.Graph()
+        g.add_edge(1, 2, distance_m=10.0)
+        g.add_edge(2, 3, distance_m=5.0)
+        g.add_edge(1, 3, distance_m=25.0)
+        return g
+
+    def _building_nodes(self) -> pd.DataFrame:
+        return pd.DataFrame(
+            [
+                {"building_id": "alpha", "building_name": "Alpha Hall", "node_id": 1},
+                {"building_id": "beta", "building_name": "Beta Hall", "node_id": 2},
+                {"building_id": "gamma", "building_name": "Gamma Hall", "node_id": 3},
+            ]
+        )
+
+    def test_compute_all_pairs_routes_returns_ordered_pairs(self):
+        routes_df = compute_all_pairs_routes(self._graph(), self._building_nodes(), walking_speed_m_per_min=100.0)
+
+        # 3 buildings -> 3 * 2 ordered origin/destination pairs
+        assert len(routes_df) == 6
+        assert set(routes_df.columns) >= {
+            "origin_building_id",
+            "destination_building_id",
+            "algorithm",
+            "distance_m",
+            "estimated_time_min",
+            "path_node_count",
+            "path_nodes",
+            "path_buildings",
+            "computed_at",
+        }
+        assert not (routes_df["origin_building_id"] == routes_df["destination_building_id"]).any()
+
+    def test_compute_all_pairs_routes_calculates_time_and_paths(self):
+        routes_df = compute_all_pairs_routes(self._graph(), self._building_nodes(), walking_speed_m_per_min=100.0)
+        alpha_to_gamma = routes_df[
+            (routes_df["origin_building_id"] == "alpha") & (routes_df["destination_building_id"] == "gamma")
+        ].iloc[0]
+
+        assert alpha_to_gamma["distance_m"] == pytest.approx(15.0)
+        assert alpha_to_gamma["estimated_time_min"] == pytest.approx(0.15)
+        assert alpha_to_gamma["path_node_count"] == 3
+        assert alpha_to_gamma["path_nodes"] == "1|2|3"
+
+    def test_compute_all_pairs_routes_raises_on_missing_columns(self):
+        bad_df = pd.DataFrame([{"building_id": "alpha", "node_id": 1}])
+
+        with pytest.raises(ValueError, match="Missing required building-node columns"):
+            compute_all_pairs_routes(self._graph(), bad_df)

@@ -12,6 +12,7 @@ Team project for learning Git collaboration while building a data-science routin
 - `data/processed/buildings.csv`
 - `data/processed/graph_edges.csv`
 - `data/processed/routes.csv`
+- `data/processed/validation_summary.md`
 
 ## Team Workflow (Beginner Friendly)
 1. Fork this repo.
@@ -25,6 +26,7 @@ Read these first:
 - [CONTRIBUTING.md](CONTRIBUTING.md)
 - [Git Beginner Guide](docs/guides/git-beginner-guide.md)
 - [Project Design](design.md)
+- [Output Schema](docs/output-schema.md)
 
 ## Quick Start
 ```bash
@@ -34,6 +36,55 @@ pip install -r requirements.txt
 pytest -q
 ```
 
+## Run Full Pipeline
+```bash
+python main.py
+```
+
+This uses default inputs:
+- `data/manual/buildings_seed.csv`
+- `data/manual/campus_boundary.geojson`
+
+And writes:
+- `data/processed/buildings.csv`
+- `data/processed/graph_edges.csv`
+- `data/processed/routes.csv`
+- `data/processed/validation_summary.md`
+
+### Custom Run Example
+```bash
+python main.py \
+  --buildings-csv data/manual/buildings_seed.csv \
+  --boundary-geojson data/manual/campus_boundary.geojson \
+  --output-dir data/processed \
+  --algorithm dijkstra \
+  --walking-speed-m-per-min 80
+```
+
+## Troubleshooting
+### `osmnx is required to build the campus walking graph`
+Install dependencies again:
+```bash
+pip install -r requirements.txt
+```
+
+### `Boundary geometry is not a valid GeoJSON geometry`
+Check `data/manual/campus_boundary.geojson`:
+- geometry must be Polygon or MultiPolygon
+- rings must be closed
+- coordinates must be numeric (`lon, lat`)
+
+### `No buildings were loaded`
+Check `data/manual/buildings_seed.csv`:
+- file must have headers: `building_name,latitude,longitude`
+- at least one building row must exist
+
+### `No route found between nodes ...`
+This means the walking network is disconnected for some pairs.
+- verify campus boundary covers all target buildings
+- verify building coordinates are inside the boundary
+- inspect generated `graph_edges.csv` for coverage
+
 ## Repository Structure
 ```text
 src/                 # project code
@@ -41,5 +92,6 @@ tests/               # unit tests
 data/manual/         # manual input files
 data/processed/      # generated csv outputs
 docs/guides/         # contributor onboarding guides
+docs/output-schema.md# output CSV schema reference
 design.md            # project design and routing approach
 ```
